@@ -1,4 +1,7 @@
-preBuildCommand: |
-  apt-get update && apt-get install -y poppler-utils
-buildCommand: pip install -r requirements.txt
-startCommand: python main.py
+services:
+  - type: web
+    name: comprovante-guimicell-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    plan: free
