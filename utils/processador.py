@@ -1,36 +1,63 @@
+import pytesseract
+from pdf2image import convert_from_path
+from PIL import Image
 import re
+import os
+import tempfile
+
 
 def extrair_dados_texto(texto):
-    """Extrai valor, hora, forma de pagamento e número de parcelas (se houver) do texto OCR."""
-    texto = texto.lower()
+    valor_match = re.search(r'R\$\s?([0-9\.,]+)', texto)
+    valor = float(valor_match.group(1).replace('.', '').replace(',', '.')) if valor_match else 0.0
 
-    # Valor (ex: R$ 1.200,50 ou 1200,50)
-    padrao_valor = re.search(r'(r?\$?\s?[\d\.]+\s?,\s?\d{2})', texto)
-    valor = padrao_valor.group(1).replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".") if padrao_valor else None
+    horario_match = re.search(r'(\d{2}:\d{2}:\d{2})', texto)
+    horario = horario_match.group(1) if horario_match else '00:00:00'
 
-    # Hora (ex: 14:35 ou 09:02:33)
-    padrao_hora = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', texto)
-    hora = padrao_hora.group(1) if padrao_hora else None
+    parcelas_match = re.search(r'(\d{1,2})x', texto)
+    parcelas = int(parcelas_match.group(1)) if parcelas_match else 1
 
-    # Forma de pagamento
-    if 'crédito' in texto or 'credito' in texto:
-        forma_pagamento = 'crédito'
-    elif 'débito' in texto or 'debito' in texto:
-        forma_pagamento = 'débito'
-    elif 'pix' in texto:
-        forma_pagamento = 'pix'
-    elif 'dinheiro' in texto:
-        forma_pagamento = 'dinheiro'
-    else:
-        forma_pagamento = 'indefinido'
+    return valor, horario, parcelas
 
-    # Parcelas (ex: 3x, 10x)
-    padrao_parcelas = re.search(r'(\d{1,2})x', texto)
-    parcelas = int(padrao_parcelas.group(1)) if padrao_parcelas else 1 if forma_pagamento == 'crédito' else 0
 
-    return {
-        'valor': float(valor) if valor else None,
-        'hora': hora,
-        'forma_pagamento': forma_pagamento,
-        'parcelas': parcelas
+def aplicar_taxa(valor, parcelas):
+    # Tabela de taxas
+    taxas = {
+        1: 4.39, 2: 5.19, 3: 6.19, 4: 7.09, 5: 7.99, 6: 8.89,
+        7: 9.79, 8: 10.69, 9: 11.59, 10: 12.49, 11: 13.39,
+        12: 14.29, 13: 15.19, 14: 16.09, 15: 16.99, 16: 17.89,
+        17: 18.79, 18: 19.69
     }
+
+    taxa = taxas.get(parcelas, 0)
+    valor_liquido = valor * (1 - taxa / 100)
+    return round(valor_liquido, 2), taxa
+
+
+def processar_comprovante(file_path):
+    texto_extraido = ""
+
+    # Detecta extensão e processa
+    _, ext = os.path.splitext(file_path)
+
+    try:
+        if ext.lower() == '.pdf':
+            imagens = convert_from_path(file_path)
+            for img in imagens:
+                texto_extraido += pytesseract.image_to_string(img, lang='por')
+        else:
+            img = Image.open(file_path)
+            texto_extraido = pytesseract.image_to_string(img, lang='por')
+
+        valor, horario, parcelas = extrair_dados_texto(texto_extraido)
+        valor_liquido, taxa = aplicar_taxa(valor, parcelas)
+
+        return {
+            "valor_bruto": valor,
+            "horario": horario,
+            "parcelas": parcelas,
+            "taxa": taxa,
+            "valor_liquido": valor_liquido
+        }
+
+    except Exception as e:
+        return {"erro": str(e)}
