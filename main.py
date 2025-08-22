@@ -10,7 +10,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-TOKEN = '8363714673:AAESwB7dBANTBXxM69CZenp8Rn0e8F5aXdM'  # Substitua se necessário
+TOKEN = '8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA'  # Substitua se necessário
 
 # Handler principal
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
