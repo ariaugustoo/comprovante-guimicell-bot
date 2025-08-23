@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = '8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA'
 
-# Baixar imagem ou PDF
+# Função para baixar imagem ou PDF
 async def baixar_arquivo(file_id, bot):
     file = await bot.get_file(file_id)
     caminho = f"/tmp/{file_id}"
@@ -21,7 +21,7 @@ async def baixar_arquivo(file_id, bot):
                 f.write(await resp.read())
     return caminho
 
-# Quando recebe comprovante
+# Função que lida com mensagens de imagem ou documento
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tipo = None
     file_id = None
