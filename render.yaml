@@ -1,13 +1,13 @@
+# render.yaml
 services:
   - type: web
-    name: comprovante-guimicell-bot
+    name: dbhcomprovantebot
     env: python
-    plan: free
+    buildCommand: |
+      apt-get update && \
+      apt-get install -y tesseract-ocr libtesseract-dev poppler-utils && \
+      pip install -r requirements.txt
+    startCommand: python main.py
     runtime: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.12
-    autoDeploy: true
-
+    plan: free
+    region: oregon
