@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==20.8
-pillow==11.3.0
-pytesseract==0.3.13
-httpx==0.26.0
+pytesseract
+Pillow
+httpx
 nest_asyncio
