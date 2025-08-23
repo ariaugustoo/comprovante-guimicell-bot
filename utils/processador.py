@@ -1,125 +1,86 @@
+import re
 from datetime import datetime
+from PIL import Image
+import pytesseract
+import io
 
-# Taxas por quantidade de parcelas
-TAXAS_CARTAO = {
-    1: 4.39,
-    2: 5.19,
-    3: 6.19,
-    4: 6.59,
-    5: 7.19,
-    6: 8.29,
-    7: 9.19,
-    8: 9.99,
-    9: 10.29,
-    10: 10.88,
-    11: 11.99,
-    12: 12.52,
-    13: 13.69,
-    14: 14.19,
-    15: 14.69,
-    16: 15.19,
-    17: 15.89,
-    18: 16.84
+# Lista global de comprovantes
+comprovantes = []
+
+# Tabela de taxas de cartão
+taxas_cartao = {
+    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719, 6: 0.0829,
+    7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
+    13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
 }
 
-comprovantes = {}
+# Função para processar imagem via OCR
+def processar_comprovante(file_bytes):
+    image = Image.open(io.BytesIO(file_bytes))
+    texto = pytesseract.image_to_string(image)
 
-def formatar_reais(valor):
-    return f"R$ {valor:,.2f}".replace(".", "v").replace(",", ".").replace("v", ",")
+    valor_match = re.search(r'(\d{1,3}(?:[\.,]\d{3})*[\.,]\d{2})', texto)
+    valor = float(valor_match.group(1).replace('.', '').replace(',', '.')) if valor_match else None
 
-def processar_comprovante(caminho_imagem, user_id):
-    # (A leitura OCR da imagem pode ser implementada aqui futuramente)
-    return "🔍 Leitura OCR ainda não implementada. Envie o valor manualmente: `6438,76 pix` ou `7.899,99 10x`."
+    hora_match = re.search(r'(\d{2}:\d{2})', texto)
+    hora = hora_match.group(1) if hora_match else datetime.now().strftime("%H:%M")
 
-def salvar_comprovante_manual(valor_str, parcelas, taxa_pix, user_id):
-    try:
-        valor = float(valor_str)
-    except ValueError:
-        return "❌ Valor inválido. Tente no formato: `150,00 3x` ou `6.438,76 pix`"
+    parcelas_match = re.search(r'(\d{1,2})x', texto.lower())
+    parcelas = int(parcelas_match.group(1)) if parcelas_match else 1
 
-    if user_id not in comprovantes:
-        comprovantes[user_id] = []
+    if valor is None:
+        raise ValueError("Valor não identificado no comprovante.")
 
-    data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    taxa = taxas_cartao.get(parcelas, 0.0)
+    valor_liquido = round(valor * (1 - taxa), 2)
 
-    if taxa_pix:
-        taxa_percentual = taxa_pix
-        valor_liquido = round(valor * (1 - taxa_percentual / 100), 2)
-        tipo = "PIX"
-    else:
-        taxa_percentual = TAXAS_CARTAO.get(parcelas, 0)
-        valor_liquido = round(valor * (1 - taxa_percentual / 100), 2)
-        tipo = f"{parcelas}x no cartão"
-
-    dados = {
-        "valor_bruto": valor,
+    comprovante = {
+        "valor": valor,
         "parcelas": parcelas,
-        "taxa": taxa_percentual,
+        "hora": hora,
+        "taxa": taxa,
         "valor_liquido": valor_liquido,
-        "data_hora": data_hora,
-        "pago": False,
-        "tipo": tipo
+        "pago": False
     }
+    comprovantes.append(comprovante)
+    return comprovante
 
-    comprovantes[user_id].append(dados)
+# Função para salvar comprovante manual (PIX ou texto)
+def salvar_comprovante_manual(valor, tipo, parcelas=1):
+    taxa = 0.002 if tipo == "pix" else taxas_cartao.get(parcelas, 0.0)
+    valor_liquido = round(valor * (1 - taxa), 2)
 
-    return f"""
-📄 *Comprovante registrado:*
-💰 Valor bruto: {formatar_reais(valor)}
-💳 Parcelas: {parcelas if not taxa_pix else 'N/A'}
-⏰ Horário: {data_hora}
-📉 Taxa aplicada: {taxa_percentual:.2f}%
-✅ Valor líquido a pagar: {formatar_reais(valor_liquido)}
-    """.strip()
+    comprovante = {
+        "valor": valor,
+        "parcelas": parcelas,
+        "hora": datetime.now().strftime("%H:%M"),
+        "taxa": taxa,
+        "valor_liquido": valor_liquido,
+        "pago": False
+    }
+    comprovantes.append(comprovante)
+    return comprovante
 
-def marcar_comprovante_pago(user_id):
-    if user_id not in comprovantes or not comprovantes[user_id]:
-        return False
-    for comprovante in reversed(comprovantes[user_id]):
-        if not comprovante["pago"]:
-            comprovante["pago"] = True
-            return True
-    return False
+# Marcar comprovante como pago
+def marcar_comprovante_pago():
+    for c in reversed(comprovantes):
+        if not c["pago"]:
+            c["pago"] = True
+            return c
+    return None
 
-def calcular_total_pendente(user_id):
-    if user_id not in comprovantes:
-        return 0.0
-    return sum(c["valor_liquido"] for c in comprovantes[user_id] if not c["pago"])
+# Calcular total pendente
+def calcular_total_pendente():
+    return round(sum(c["valor_liquido"] for c in comprovantes if not c["pago"]), 2)
 
-def calcular_total_geral(user_id):
-    if user_id not in comprovantes:
-        return 0.0
-    return sum(c["valor_liquido"] for c in comprovantes[user_id])
+# Calcular total geral
+def calcular_total_geral():
+    return round(sum(c["valor_liquido"] for c in comprovantes), 2)
 
-def listar_comprovantes(user_id, pagos=False):
-    if user_id not in comprovantes or not comprovantes[user_id]:
-        return "📂 Nenhum comprovante encontrado."
+# Listar comprovantes pagos ou pendentes
+def listar_comprovantes(pagos=False):
+    return [c for c in comprovantes if c["pago"] == pagos]
 
-    lista = [c for c in comprovantes[user_id] if c["pago"] == pagos]
-    if not lista:
-        return "📂 Nenhum comprovante encontrado neste status."
-
-    status = "✅ *Pagos*" if pagos else "🕒 *Pendentes*"
-    mensagem = [f"{status}:\n"]
-    for i, c in enumerate(lista, 1):
-        mensagem.append(
-            f"*{i}. {c['tipo']}*\n"
-            f"💰 {formatar_reais(c['valor_bruto'])} → {formatar_reais(c['valor_liquido'])}\n"
-            f"📉 {c['taxa']:.2f}% | ⏰ {c['data_hora']}\n"
-        )
-    return "\n".join(mensagem)
-
-def get_ultimo_comprovante(user_id):
-    if user_id not in comprovantes or not comprovantes[user_id]:
-        return "📂 Nenhum comprovante encontrado."
-
-    c = comprovantes[user_id][-1]
-    return f"""
-📌 *Último Comprovante:*
-💰 Valor bruto: {formatar_reais(c['valor_bruto'])}
-💳 Parcelas: {c['parcelas'] if c['tipo'] != 'PIX' else 'N/A'}
-⏰ Horário: {c['data_hora']}
-📉 Taxa aplicada: {c['taxa']:.2f}%
-✅ Valor líquido a pagar: {formatar_reais(c['valor_liquido'])}
-🧾 Status: {'✅ Pago' if c['pago'] else '🕒 Pendente'}
-""".strip()
+# Obter último comprovante
+def get_ultimo_comprovante():
+    return comprovantes[-1] if comprovantes else None
