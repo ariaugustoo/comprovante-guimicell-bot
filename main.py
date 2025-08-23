@@ -6,37 +6,42 @@ import aiohttp
 
 from utils.processador import processar_comprovante
 
-# Configurações de logging
+# Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-TOKEN = '8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA'
+TOKEN = '8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA'  # troque se quiser
 
+# Função para baixar arquivo (foto ou PDF)
 async def baixar_arquivo(file_id, bot):
     file = await bot.get_file(file_id)
-    caminho = f"/tmp/{file_id}"  # caminho temporário para o arquivo
+    caminho = f"/tmp/{file_id}"  # arquivo temporário
 
     async with aiohttp.ClientSession() as session:
         async with session.get(file.file_path) as resp:
             with open(caminho, 'wb') as f:
                 f.write(await resp.read())
+
     return caminho
 
-# Handler principal
+# Função principal para tratar a mensagem
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document if update.message else None
-    if not document:
-        return
+    file_id = None
 
-    # Baixa o arquivo do Telegram
-    path = await baixar_arquivo(document.file_id, context.bot)
+    if update.message.document:
+        file_id = update.message.document.file_id
+    elif update.message.photo:
+        file_id = update.message.photo[-1].file_id
+    else:
+        return  # ignora mensagens sem documento ou foto
 
-    # Processa o comprovante
+    # Baixar e processar
+    path = await baixar_arquivo(file_id, context.bot)
     resultado = processar_comprovante(path)
 
-    # Monta a resposta
+    # Montar resposta
     if "erro" in resultado:
         resposta = f"⚠️ {resultado['erro']}"
     else:
@@ -49,16 +54,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Valor líquido a pagar: *R$ {resultado['valor_liquido']:.2f}*"
         )
 
-    # Envia no grupo
     await update.message.reply_text(resposta, parse_mode="Markdown")
-
-    # Remove o arquivo temporário
     os.remove(path)
 
-# Inicialização do app
+# Iniciar bot
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_message))
 
     print("Bot online e funcionando!")
     app.run_polling()
