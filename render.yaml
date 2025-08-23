@@ -2,8 +2,7 @@ services:
   - type: web
     name: comprovante-guimicell-bot
     env: python
+    region: oregon
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "bash start.sh"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.12
+    startCommand: "./start.sh"
+    autoDeploy: true
