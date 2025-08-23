@@ -1,155 +1,109 @@
 import logging
-import os
-import re
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
-from utils.processador import processar_comprovante, salvar_comprovante_manual, marcar_comprovante_pago, calcular_total_pendente, listar_comprovantes, get_ultimo_comprovante, calcular_total_geral
-from datetime import datetime
-
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-
-comprovantes = []
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from utils.processador import (
+    processar_comprovante,
+    salvar_comprovante_manual,
+    marcar_comprovante_pago,
+    calcular_total_pendente,
+    listar_comprovantes,
+    get_ultimo_comprovante,
+    calcular_total_geral
 )
 
-# Comando de ajuda
+# ====================== CONFIGURAÇÃO ======================
+TOKEN = "8363714673:AAESwB7dBANTBXxM69CZenp8Rn0e8F5aXdM"  # ⚠️ Substitua por variável de ambiente em produção
+logging.basicConfig(level=logging.INFO)
+# ==========================================================
+
+
+# ===================== COMANDOS ===========================
+
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    comandos = """
-📋 *Comandos disponíveis*:
-/ajuda - Mostra esta mensagem
-✅ - Marca o último comprovante como pago
-"total que devo" - Mostra o valor total pendente
-"listar pendentes" - Lista todos os comprovantes não pagos
-"listar pagos" - Lista os comprovantes já pagos
-"último comprovante" - Mostra o último enviado
-"total geral" - Total de todos (pagos + pendentes)
-/o que devo - Igual ao "total que devo"
-/quanto falta - Igual ao "total que devo"
+    texto = (
+        "🧾 *Comandos disponíveis:*\n\n"
+        "• Envie o *valor* + *'pix'* → para pagamento via PIX\n"
+        "  Ex: `2.345,99 pix`\n"
+        "• Envie o *valor* + *'10x'* → para cartão parcelado\n"
+        "  Ex: `1.250,00 6x`\n"
+        "• Envie ✅ → para marcar o último como pago\n\n"
+        "• `/total` ou `/quanto_falta` → total a pagar\n"
+        "• `/listar_pendentes` → lista dos pendentes\n"
+        "• `/listar_pagos` → lista dos pagos\n"
+        "• `/ultimo` → mostra o último comprovante\n"
+        "• `/total_geral` → pagos + pendentes\n"
+        "• `/ajuda` → mostra os comandos\n"
+    )
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
-*💳 Como enviar comprovantes manualmente:*
-• Envie no formato: `152,90 3x` ou `152.90 3x`
-• Para PIX, envie: `6438,76 pix` ou `6438.76 pix`
-"""
-    await update.message.reply_text(comandos, parse_mode="Markdown")
 
-# Marcar como pago
-async def marcar_pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if marcar_comprovante_pago(update.message.from_user.id):
-        await update.message.reply_text("✅ Comprovante marcado como pago com sucesso!")
-    else:
-        await update.message.reply_text("❌ Nenhum comprovante encontrado para marcar como pago.")
+async def comando_total(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total = calcular_total_pendente()
+    await update.message.reply_text(f"💰 *Total em aberto:* R$ {total:.2f}", parse_mode="Markdown")
 
-# Mostrar total em aberto
-async def total_que_devo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = calcular_total_pendente(update.message.from_user.id)
-    await update.message.reply_text(f"💸 Total pendente: R$ {total:.2f}")
 
-# Comando alternativo
-quanto_falta = total_que_devo
-o_que_devo = total_que_devo
-
-# Listar pendentes
-async def listar_pendentes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensagem = listar_comprovantes(update.message.from_user.id, pagos=False)
+async def comando_listar_pendentes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensagem = listar_comprovantes(pagos=False)
     await update.message.reply_text(mensagem, parse_mode="Markdown")
 
-# Listar pagos
-async def listar_pagos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensagem = listar_comprovantes(update.message.from_user.id, pagos=True)
+
+async def comando_listar_pagos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensagem = listar_comprovantes(pagos=True)
     await update.message.reply_text(mensagem, parse_mode="Markdown")
 
-# Último comprovante
-async def ultimo_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensagem = get_ultimo_comprovante(update.message.from_user.id)
+
+async def comando_ultimo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensagem = get_ultimo_comprovante()
     await update.message.reply_text(mensagem, parse_mode="Markdown")
 
-# Total geral
-async def total_geral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = calcular_total_geral(update.message.from_user.id)
-    await update.message.reply_text(f"📊 Total geral de comprovantes: R$ {total:.2f}")
 
-# Processar imagem
-async def receber_imagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        arquivo = await update.message.photo[-1].get_file()
-        caminho = f"comprovante_{update.message.from_user.id}.jpg"
-        await arquivo.download_to_drive(caminho)
+async def comando_total_geral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total = calcular_total_geral()
+    await update.message.reply_text(f"📊 *Total geral:* R$ {total:.2f}", parse_mode="Markdown")
 
-        resultado = processar_comprovante(caminho, update.message.from_user.id)
-        await update.message.reply_text(resultado, parse_mode="Markdown")
-        os.remove(caminho)
 
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao processar a imagem: {e}")
+# ===================== MENSAGENS ===========================
 
-# Processar valor manual (PIX ou Cartão)
-async def receber_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip().lower()
-
-    if texto in ["✅", "pago"]:
-        await marcar_pago(update, context)
+async def receber_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
         return
 
-    if texto in ["total que devo", "/total_que_devo", "/quanto_falta", "/o_que_devo"]:
-        await total_que_devo(update, context)
+    user = update.message.from_user
+    texto = update.message.text
+
+    if not texto:
         return
 
-    if texto == "listar pendentes":
-        await listar_pendentes(update, context)
+    # ✅ Marcar como pago
+    if texto.strip() == "✅":
+        resposta = marcar_comprovante_pago()
+        await update.message.reply_text(resposta, parse_mode="Markdown")
         return
 
-    if texto == "listar pagos":
-        await listar_pagos(update, context)
-        return
+    # Processa comando de valor
+    resposta = salvar_comprovante_manual(texto, user.first_name)
+    await update.message.reply_text(resposta, parse_mode="Markdown")
 
-    if texto == "último comprovante":
-        await ultimo_comprovante(update, context)
-        return
 
-    if texto == "total geral":
-        await total_geral(update, context)
-        return
+# ===================== MAIN ================================
 
-    match_pix = re.match(r"([\d.,]+)\s*pix", texto)
-    match_cartao = re.match(r"([\d.,]+)\s*(\d{1,2})x", texto)
-
-    if match_pix:
-        valor = match_pix.group(1).replace(".", "").replace(",", ".")
-        resultado = salvar_comprovante_manual(valor, 1, 0.2, update.message.from_user.id)
-        await update.message.reply_text(resultado, parse_mode="Markdown")
-
-    elif match_cartao:
-        valor = match_cartao.group(1).replace(".", "").replace(",", ".")
-        parcelas = int(match_cartao.group(2))
-        resultado = salvar_comprovante_manual(valor, parcelas, None, update.message.from_user.id)
-        await update.message.reply_text(resultado, parse_mode="Markdown")
-
-    else:
-        await update.message.reply_text("❌ Valor inválido. Envie apenas o valor, como: `152,90 3x` ou `6438,76 pix`", parse_mode="Markdown")
-
-# Inicialização
-async def main():
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("ajuda", ajuda))
-    app.add_handler(CommandHandler("start", ajuda))
-    app.add_handler(CommandHandler("o_que_devo", o_que_devo))
-    app.add_handler(CommandHandler("quanto_falta", quanto_falta))
-    app.add_handler(CommandHandler("total_que_devo", total_que_devo))
-    app.add_handler(CommandHandler("listar_pendentes", listar_pendentes))
-    app.add_handler(CommandHandler("listar_pagos", listar_pagos))
-    app.add_handler(CommandHandler("último_comprovante", ultimo_comprovante))
-    app.add_handler(CommandHandler("total_geral", total_geral))
-    app.add_handler(MessageHandler(filters.PHOTO, receber_imagem))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_texto))
+    app.add_handler(CommandHandler("total", comando_total))
+    app.add_handler(CommandHandler("quanto_falta", comando_total))
+    app.add_handler(CommandHandler("oquedevo", comando_total))
+    app.add_handler(CommandHandler("listar_pendentes", comando_listar_pendentes))
+    app.add_handler(CommandHandler("listar_pagos", comando_listar_pagos))
+    app.add_handler(CommandHandler("ultimo", comando_ultimo))
+    app.add_handler(CommandHandler("total_geral", comando_total_geral))
 
-    print("Bot iniciado com sucesso.")
-    await app.run_polling()
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_mensagem))
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    print("🤖 Bot rodando...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
