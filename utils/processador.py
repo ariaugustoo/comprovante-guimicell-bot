@@ -1,71 +1,82 @@
 import pytesseract
 from PIL import Image
-from pdf2image import convert_from_path
+import tempfile
+import os
+from telegram import Update
 import re
+from datetime import datetime
 
-# Tabelas de taxas simuladas (Guimicell)
+# Tabela de taxas por número de parcelas
 TAXAS = {
-    1: 0.0439,
-    2: 0.0519,
-    3: 0.0619,
-    4: 0.0729,
-    5: 0.0839,
-    6: 0.0949,
-    7: 0.1059,
-    8: 0.1169,
-    9: 0.1279,
-    10: 0.1389,
-    11: 0.1499,
-    12: 0.1609,
-    13: 0.1719,
-    14: 0.1829,
-    15: 0.1939,
-    16: 0.2040,
-    17: 0.2159,
-    18: 0.2269,
+    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29, 7: 9.19, 8: 9.99,
+    9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69,
+    16: 15.19, 17: 15.89, 18: 16.84
 }
 
-def extrair_texto(caminho):
-    if caminho.endswith('.pdf'):
-        imagens = convert_from_path(caminho)
-        texto = ""
-        for img in imagens:
-            texto += pytesseract.image_to_string(img)
-        return texto
+comprovantes_processados = {}
+
+def extrair_info(texto):
+    valor_match = re.search(r"([\d.]+,\d{2})", texto)
+    valor = float(valor_match.group(1).replace(".", "").replace(",", ".")) if valor_match else None
+
+    parcelas_match = re.search(r"(\d+)[xX]", texto)
+    parcelas = int(parcelas_match.group(1)) if parcelas_match else 1
+
+    hora_match = re.search(r"(\d{2}:\d{2})", texto)
+    hora = hora_match.group(1) if hora_match else datetime.now().strftime("%H:%M")
+
+    return valor, parcelas, hora
+
+def calcular_liquido(valor, parcelas):
+    if parcelas == 0:
+        taxa = 0.2
+    elif parcelas in TAXAS:
+        taxa = TAXAS[parcelas]
     else:
-        img = Image.open(caminho)
-        return pytesseract.image_to_string(img)
+        taxa = 0.2
+    return valor * (1 - taxa / 100), taxa
 
-def processar_comprovante(caminho):
-    try:
-        texto = extrair_texto(caminho)
+async def processar_comprovante(update: Update, context, valor_manual=None):
+    user = update.message.from_user.first_name
+    mensagem_id = update.message.message_id
+    chat_id = update.message.chat_id
 
-        # Extrair valor com vírgula ou ponto
-        valor_match = re.search(r'([\d\.]+,\d{2})', texto)
-        valor_str = valor_match.group(1).replace('.', '').replace(',', '.') if valor_match else None
-        valor_bruto = float(valor_str) if valor_str else None
+    if valor_manual:
+        try:
+            bruto = float(valor_manual.replace(".", "").replace(",", "."))
+        except:
+            await context.bot.send_message(chat_id, "❌ Valor inválido. Envie um número como 1234,56")
+            return
 
-        # Extrair número de parcelas (ex: "6 PARCELAS" ou "EM 6X")
-        parcelas_match = re.search(r'(\d{1,2})\s*(PARCELAS|X|x)', texto)
-        parcelas = int(parcelas_match.group(1)) if parcelas_match else 1
+        parcelas = 1
+        hora = datetime.now().strftime("%H:%M")
+    else:
+        foto = await update.message.photo[-1].get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+            await foto.download_to_drive(f.name)
+            texto = pytesseract.image_to_string(Image.open(f.name))
+            bruto, parcelas, hora = extrair_info(texto)
+            os.unlink(f.name)
 
-        # Extrair horário (ex: 15:47 ou 09:32)
-        hora_match = re.search(r'(\d{2}:\d{2})', texto)
-        hora = hora_match.group(1) if hora_match else "Não encontrado"
+    if not bruto:
+        await context.bot.send_message(chat_id, "❌ Não consegui ler o valor. Responda esta mensagem com o valor manualmente.")
+        return
 
-        # Definir taxa com base nas parcelas
-        taxa_aplicada = TAXAS.get(parcelas, 0.10)  # taxa padrão 10% se não encontrar
+    valor_liquido, taxa = calcular_liquido(bruto, parcelas)
 
-        # Calcular valor líquido
-        valor_liquido = valor_bruto * (1 - taxa_aplicada) if valor_bruto else 0.0
+    mensagem = (
+        f"📄 Comprovante analisado:\n"
+        f"💰 Valor bruto: R$ {bruto:,.2f}\n"
+        f"💳 Parcelas: {parcelas}x\n"
+        f"⏰ Horário: {hora}\n"
+        f"📉 Taxa aplicada: {taxa:.2f}%\n"
+        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
+    )
 
-        return {
-            "valor_bruto": valor_bruto,
-            "parcelas": parcelas,
-            "hora": hora,
-            "taxa_aplicada": taxa_aplicada,
-            "valor_liquido": valor_liquido
-        }
+    comprovantes_processados[mensagem_id] = valor_liquido
 
-    except Exception as e:
-        return {"erro": f"Erro ao processar o comprovante: {str(e)}"}
+    await context.bot.send_message(chat_id, mensagem)
+
+    # Somar total a pagar (sem ✅)
+    total = sum(v for k, v in comprovantes_processados.items() if '✅' not in context.chat_data.get(str(k), ''))
+    await context.bot.send_message(chat_id, f"📊 Total a pagar (sem pagos): R$ {total:,.2f}")
