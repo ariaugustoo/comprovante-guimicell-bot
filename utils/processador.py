@@ -1,123 +1,150 @@
 import pytesseract
 from PIL import Image
-from io import BytesIO
-from telegram import Update
-from telegram.ext import ContextTypes
 import re
+from datetime import datetime
+from telegram import Update, Message
+from io import BytesIO
 
-GROUP_ID = -1008126124610  # substitua pelo seu se necessário
-
-# Tabela de taxas
+# Taxas Guimicell
 TAXAS_CARTAO = {
     1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
     7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
     13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
 }
-
 TAXA_PIX = 0.2
 
-# Lista de comprovantes processados
-comprovantes_processados = []
+# Banco de dados temporário
+comprovantes = []
 
-# OCR principal
-async def processar_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE, tipo: str):
-    try:
-        if tipo == "foto":
-            file = await update.message.photo[-1].get_file()
-        elif tipo == "documento":
-            file = await update.message.document.get_file()
-        else:
-            await update.message.reply_text("Tipo de comprovante inválido.")
-            return
+# Extrair valor do texto OCR
+def extrair_valor(texto):
+    padrao = r'(\d{1,3}(?:\.\d{3})*,\d{2})'
+    encontrados = re.findall(padrao, texto)
+    for valor in encontrados:
+        if len(valor) >= 4:
+            return float(valor.replace('.', '').replace(',', '.'))
+    return None
 
-        image_bytes = await file.download_as_bytearray()
-        image = Image.open(BytesIO(image_bytes))
-        texto = pytesseract.image_to_string(image, lang='por')
+# Extrair horário
+def extrair_horario(texto):
+    padrao = r'\b([01]?\d|2[0-3]):[0-5]\d\b'
+    encontrados = re.findall(padrao, texto)
+    return encontrados[0] if encontrados else datetime.now().strftime("%H:%M")
 
-        match_valor = re.search(r'R?\$?\s?(\d{1,3}(?:[\.,]\d{3})*[\.,]\d{2})', texto)
-        match_horario = re.search(r'(\d{2}:\d{2})', texto)
-        match_parcelas = re.search(r'(\d{1,2})x', texto)
+# Extrair parcelas
+def extrair_parcelas(texto):
+    padrao = r'(\d{1,2})x'
+    encontrados = re.findall(padrao, texto.lower())
+    return int(encontrados[0]) if encontrados else 1
 
-        if match_valor:
-            valor_bruto_str = match_valor.group(1).replace('.', '').replace(',', '.')
-            valor_bruto = float(valor_bruto_str)
-            horario = match_horario.group(1) if match_horario else "Horário não encontrado"
-            parcelas = int(match_parcelas.group(1)) if match_parcelas else 1
-            taxa = TAXAS_CARTAO.get(parcelas, TAXAS_CARTAO[1])
-            valor_liquido = round(valor_bruto * (1 - taxa / 100), 2)
+# Calcular taxa e valor líquido
+def calcular_liquido(valor, parcelas):
+    if parcelas == 1:
+        taxa = TAXA_PIX
+    else:
+        taxa = TAXAS_CARTAO.get(parcelas, TAXAS_CARTAO[18])  # assume 18x se não achar
+    liquido = valor * (1 - taxa / 100)
+    return round(taxa, 2), round(liquido, 2)
 
-            mensagem = (
-                f"📄 Comprovante analisado:\n"
-                f"💰 Valor bruto: R$ {valor_bruto:,.2f}\n"
-                f"💳 Parcelas: {parcelas}x\n"
-                f"⏰ Horário: {horario}\n"
-                f"📉 Taxa aplicada: {taxa}%\n"
-                f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
-            )
+# Processar imagem/documento
+async def processar_comprovante(update: Update, context, tipo):
+    message: Message = update.message
+    file = None
 
-            comprovantes_processados.append({'valor': valor_liquido, 'pago': False})
-            await update.message.reply_text(mensagem)
+    if tipo == "foto":
+        file = await message.photo[-1].get_file()
+    elif tipo == "documento":
+        file = await message.document.get_file()
 
-        else:
-            await update.message.reply_text("❌ Não consegui identificar o valor. Por favor, digite manualmente.\nDigite assim: `3500 6x 15:47`", parse_mode="Markdown")
-            context.user_data['esperando_valor_manual'] = True
+    imagem = BytesIO()
+    await file.download_to_memory(out=imagem)
+    imagem.seek(0)
+    texto = pytesseract.image_to_string(Image.open(imagem), lang="por")
 
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao processar: {e}")
+    valor = extrair_valor(texto)
+    parcelas = extrair_parcelas(texto)
+    horario = extrair_horario(texto)
 
-# Valor manual
-async def salvar_comprovante_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not context.user_data.get('esperando_valor_manual'):
-            return
-
-        partes = update.message.text.strip().split()
-        if len(partes) < 1:
-            await update.message.reply_text("Formato inválido. Use: `3500 6x 15:47`")
-            return
-
-        valor_bruto = float(partes[0].replace(',', '.'))
-        parcelas = int(partes[1].lower().replace("x", "")) if len(partes) > 1 else 1
-        horario = partes[2] if len(partes) > 2 else "Horário não informado"
-
-        taxa = TAXAS_CARTAO.get(parcelas, TAXAS_CARTAO[1])
-        valor_liquido = round(valor_bruto * (1 - taxa / 100), 2)
-
+    if valor:
+        taxa, liquido = calcular_liquido(valor, parcelas)
+        comprovantes.append({
+            "valor": valor,
+            "parcelas": parcelas,
+            "horario": horario,
+            "taxa": taxa,
+            "liquido": liquido,
+            "pago": False
+        })
         mensagem = (
             f"📄 Comprovante analisado:\n"
-            f"💰 Valor bruto: R$ {valor_bruto:,.2f}\n"
+            f"💰 Valor bruto: R$ {valor:.2f}\n"
             f"💳 Parcelas: {parcelas}x\n"
             f"⏰ Horário: {horario}\n"
             f"📉 Taxa aplicada: {taxa}%\n"
-            f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
+            f"✅ Valor líquido a pagar: R$ {liquido:.2f}"
         )
+    else:
+        mensagem = "❌ Não consegui identificar o valor. Por favor, envie manualmente."
 
-        comprovantes_processados.append({'valor': valor_liquido, 'pago': False})
+    await message.reply_text(mensagem)
+
+# Fluxo manual
+async def salvar_comprovante_manual(update: Update, context):
+    user_id = update.message.from_user.id
+    texto = update.message.text.strip()
+
+    estado = context.user_data.get("estado", {})
+    if "etapa" not in estado:
+        try:
+            valor = float(texto.replace("R$", "").replace(".", "").replace(",", "."))
+            context.user_data["estado"] = {"etapa": "parcelas", "valor": valor}
+            await update.message.reply_text("Quantas parcelas (ex: 3x)?")
+        except:
+            await update.message.reply_text("❌ Valor inválido. Exemplo: 1234,56")
+    elif estado["etapa"] == "parcelas":
+        try:
+            parcelas = int(re.sub(r"\D", "", texto))
+            context.user_data["estado"]["parcelas"] = parcelas
+            context.user_data["estado"]["etapa"] = "horario"
+            await update.message.reply_text("Qual o horário da venda? (ex: 14:30)")
+        except:
+            await update.message.reply_text("❌ Parcelas inválidas.")
+    elif estado["etapa"] == "horario":
+        horario = texto
+        valor = context.user_data["estado"]["valor"]
+        parcelas = context.user_data["estado"]["parcelas"]
+        taxa, liquido = calcular_liquido(valor, parcelas)
+        comprovantes.append({
+            "valor": valor,
+            "parcelas": parcelas,
+            "horario": horario,
+            "taxa": taxa,
+            "liquido": liquido,
+            "pago": False
+        })
+        mensagem = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: R$ {valor:.2f}\n"
+            f"💳 Parcelas: {parcelas}x\n"
+            f"⏰ Horário: {horario}\n"
+            f"📉 Taxa aplicada: {taxa}%\n"
+            f"✅ Valor líquido a pagar: R$ {liquido:.2f}"
+        )
         await update.message.reply_text(mensagem)
+        context.user_data["estado"] = {}
 
-        context.user_data['esperando_valor_manual'] = False
-
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao salvar comprovante manual: {e}")
+# Marcar comprovante como pago
+async def marcar_como_pago(update: Update, context):
+    for c in comprovantes:
+        if not c["pago"]:
+            c["pago"] = True
+            await update.message.reply_text("✅ Comprovante marcado como pago.")
+            return
+    await update.message.reply_text("⚠️ Nenhum comprovante pendente encontrado.")
 
 # Enviar total a pagar
 async def enviar_total_a_pagar(application):
-    total = sum(c['valor'] for c in comprovantes_processados if not c['pago'])
-    mensagem = f"📢 *Total a pagar (não pagos):* R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    await application.bot.send_message(chat_id=GROUP_ID, text=mensagem, parse_mode="Markdown")
-
-# Marcar como pago
-async def marcar_como_pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if '✅' in update.message.text:
-            texto = update.message.text
-            match = re.search(r'R\$ ([\d.,]+)', texto)
-            if match:
-                valor_texto = match.group(1).replace('.', '').replace(',', '.')
-                valor = float(valor_texto)
-                for c in comprovantes_processados:
-                    if not c['pago'] and abs(c['valor'] - valor) < 0.01:
-                        c['pago'] = True
-                        break
-    except Exception:
-        pass
+    total = sum(c["liquido"] for c in comprovantes if not c["pago"])
+    if total > 0:
+        texto = f"💵 Total a pagar (não pagos): R$ {total:.2f}"
+        await application.bot.send_message(chat_id=GROUP_ID, text=texto)
