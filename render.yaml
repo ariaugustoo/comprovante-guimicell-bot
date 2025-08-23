@@ -1,11 +1,10 @@
 services:
   - type: web
-    name: dbhcomprovantebot
+    name: comprovante-bot
     env: python
+    buildCommand: ""
+    startCommand: ./start.sh
     plan: free
-    region: oregon
-    buildCommand: |
-      apt-get update && \
-      apt-get install -y tesseract-ocr libtesseract-dev poppler-utils && \
-      pip install -r requirements.txt
-    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10
