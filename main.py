@@ -7,7 +7,7 @@ from telegram.ext import (
     ContextTypes,
     CommandHandler,
 )
-from processador import processar_comprovante, salvar_comprovante_manual
+from utils.processador import processar_comprovante, salvar_comprovante_manual
 
 TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
 GROUP_ID = -1002626449000
