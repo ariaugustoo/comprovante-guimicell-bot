@@ -1,72 +1,102 @@
 import logging
+import os
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
-    filters,
     CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    CallbackContext,
+    JobQueue
 )
-from utils.processador import (
-    processar_comprovante,
-    salvar_comprovante_manual,
-    enviar_total_a_pagar,
-    marcar_como_pago,
-)
-import asyncio
+from utils.processador import processar_comprovante, salvar_comprovante_manual
+from datetime import datetime
+import json
+import tempfile
 
-# Configurações
-BOT_TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
-GROUP_ID = -1002626449000  # Use seu Group ID correto
-
-# Logs
+# Ative o log
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 
-# Boas-vindas
+# Variáveis de ambiente
+TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID", "-1002626449000"))  # substitua pelo ID real
+
+# Armazenamento temporário
+comprovantes = []
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot de leitura de comprovantes iniciado com sucesso!")
+    await update.message.reply_text("✅ Bot de comprovantes iniciado!")
 
-# Recebimento
-async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        await processar_comprovante(update, context, "foto")
-    elif update.message.document:
-        await processar_comprovante(update, context, "documento")
-    elif update.message.text:
-        await salvar_comprovante_manual(update, context)
+async def handle_imagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.photo:
+        return
 
-# Marcar como pago
-async def verificar_pagamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await marcar_como_pago(update, context)
+    file = await update.message.photo[-1].get_file()
+    file_path = os.path.join(tempfile.gettempdir(), f"{file.file_id}.jpg")
+    await file.download_to_drive(file_path)
 
-# Tratamento de erro
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Erro detectado: {context.error}")
-    if update and hasattr(update, 'effective_message') and update.effective_message:
-        await update.effective_message.reply_text("⚠️ Ocorreu um erro. Verifique o conteúdo do comprovante.")
+    resultado = processar_comprovante(file_path, context, tipo="ocr")
 
-# Envio do total a cada hora
-async def enviar_total_periodico(context: ContextTypes.DEFAULT_TYPE):
-    await enviar_total_a_pagar(context.application)
+    if not resultado:
+        await update.message.reply_text("❌ Não consegui ler o comprovante. Por favor, envie o valor manualmente.")
+        return
 
-# Inicializador
-async def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    comprovantes.append(resultado)
 
-    # Adiciona handlers
+    resposta = (
+        f"📄 *Comprovante analisado:*\n"
+        f"💰 Valor bruto: R$ {resultado['valor_bruto']:.2f}\n"
+        f"💳 Parcelas: {resultado['parcelas']}x\n"
+        f"⏰ Horário: {resultado['horario']}\n"
+        f"📉 Taxa aplicada: {resultado['taxa']}%\n"
+        f"✅ Valor líquido a pagar: R$ {resultado['valor_liquido']:.2f}"
+    )
+    await update.message.reply_text(resposta, parse_mode="Markdown")
+
+async def handle_valor_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip().replace("R$", "").replace(",", ".")
+    try:
+        valor = float(texto)
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Envie apenas o valor, como: `152.90`")
+        return
+
+    # Salva valor manual com padrão 1x
+    resultado = salvar_comprovante_manual(valor, parcelas=1, horario=None)
+    comprovantes.append(resultado)
+
+    resposta = (
+        f"📄 *Comprovante manual registrado:*\n"
+        f"💰 Valor bruto: R$ {resultado['valor_bruto']:.2f}\n"
+        f"💳 Parcelas: {resultado['parcelas']}x\n"
+        f"⏰ Horário: {resultado['horario']}\n"
+        f"📉 Taxa aplicada: {resultado['taxa']}%\n"
+        f"✅ Valor líquido a pagar: R$ {resultado['valor_liquido']:.2f}"
+    )
+    await update.message.reply_text(resposta, parse_mode="Markdown")
+
+async def agendar_envio_total(context: CallbackContext):
+    total = sum(c['valor_liquido'] for c in comprovantes if not c.get("pago", False))
+    texto = f"📊 *Total a pagar (pendente):* R$ {total:.2f}"
+    await context.bot.send_message(chat_id=GROUP_ID, text=texto, parse_mode="Markdown")
+
+def main():
+    application = ApplicationBuilder().token(TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), receber_arquivo))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex("✅"), verificar_pagamento))
-    application.add_error_handler(error_handler)
+    application.add_handler(MessageHandler(filters.PHOTO, handle_imagem))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_valor_manual))
 
-    # Inicia job queue (agendamento automático de 1 em 1 hora)
-    job_queue = application.job_queue
-    job_queue.run_repeating(enviar_total_periodico, interval=3600, first=10)
+    # Agendamento automático
+    job_queue: JobQueue = application.job_queue
+    job_queue.run_repeating(agendar_envio_total, interval=3600, first=10)
 
-    print("Bot rodando...")
-    await application.run_polling()
+    print("🚀 Bot rodando com sucesso...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
