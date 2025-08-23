@@ -1,10 +1,9 @@
 import pytesseract
 from PIL import Image
 from pdf2image import convert_from_path
-
 import re
 
-# Tabelas de taxas simuladas (exemplo Guimicell)
+# Tabelas de taxas simuladas (Guimicell)
 TAXAS = {
     1: 0.0439,
     2: 0.0519,
@@ -21,49 +20,52 @@ TAXAS = {
     13: 0.1719,
     14: 0.1829,
     15: 0.1939,
-    16: 0.2049,
+    16: 0.2040,
     17: 0.2159,
     18: 0.2269,
 }
 
-def extrair_texto(path: str) -> str:
-    if path.lower().endswith(".pdf"):
-        imagens = convert_from_path(path)
-        texto = "\n".join([pytesseract.image_to_string(img) for img in imagens])
+def extrair_texto(caminho):
+    if caminho.endswith('.pdf'):
+        imagens = convert_from_path(caminho)
+        texto = ""
+        for img in imagens:
+            texto += pytesseract.image_to_string(img)
+        return texto
     else:
-        imagem = Image.open(path)
-        texto = pytesseract.image_to_string(imagem)
+        img = Image.open(caminho)
+        return pytesseract.image_to_string(img)
 
-    return texto
-
-def processar_comprovante(path: str) -> dict:
+def processar_comprovante(caminho):
     try:
-        texto = extrair_texto(path)
+        texto = extrair_texto(caminho)
 
-        # Extrai valor
-        match_valor = re.search(r"([\d\.]+,\d{2})", texto)
-        valor_bruto = float(match_valor.group(1).replace('.', '').replace(',', '.')) if match_valor else 0.0
+        # Extrair valor com vírgula ou ponto
+        valor_match = re.search(r'([\d\.]+,\d{2})', texto)
+        valor_str = valor_match.group(1).replace('.', '').replace(',', '.') if valor_match else None
+        valor_bruto = float(valor_str) if valor_str else None
 
-        # Extrai parcelas
-        match_parcelas = re.search(r"(\d{1,2})x", texto, re.IGNORECASE)
-        parcelas = int(match_parcelas.group(1)) if match_parcelas else 1
+        # Extrair número de parcelas (ex: "6 PARCELAS" ou "EM 6X")
+        parcelas_match = re.search(r'(\d{1,2})\s*(PARCELAS|X|x)', texto)
+        parcelas = int(parcelas_match.group(1)) if parcelas_match else 1
 
-        # Extrai hora
-        match_hora = re.search(r"\b(\d{2}:\d{2})\b", texto)
-        hora = match_hora.group(1) if match_hora else "00:00"
+        # Extrair horário (ex: 15:47 ou 09:32)
+        hora_match = re.search(r'(\d{2}:\d{2})', texto)
+        hora = hora_match.group(1) if hora_match else "Não encontrado"
 
-        # Pega taxa pela quantidade de parcelas
-        taxa = TAXAS.get(parcelas, 0.04)  # taxa padrão de 4% se não encontrado
+        # Definir taxa com base nas parcelas
+        taxa_aplicada = TAXAS.get(parcelas, 0.10)  # taxa padrão 10% se não encontrar
 
-        valor_liquido = valor_bruto * (1 - taxa)
+        # Calcular valor líquido
+        valor_liquido = valor_bruto * (1 - taxa_aplicada) if valor_bruto else 0.0
 
         return {
             "valor_bruto": valor_bruto,
             "parcelas": parcelas,
             "hora": hora,
-            "taxa_aplicada": taxa,
+            "taxa_aplicada": taxa_aplicada,
             "valor_liquido": valor_liquido
         }
 
     except Exception as e:
-        return {"erro": f"Erro ao processar comprovante: {str(e)}"}
+        return {"erro": f"Erro ao processar o comprovante: {str(e)}"}
