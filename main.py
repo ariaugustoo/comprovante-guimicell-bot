@@ -1,114 +1,77 @@
 import logging
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
+    ContextTypes,
     MessageHandler,
     filters,
-    ContextTypes,
     CommandHandler,
 )
-from utils.processador import processar_comprovante, salvar_comprovante_manual
+from utils.processador import (
+    processar_comprovante,
+    salvar_comprovante_manual,
+    enviar_total_a_pagar,
+    marcar_como_pago,
+)
 
-TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
+import asyncio
+import os
+
+# Configurações
+BOT_TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
 GROUP_ID = -1002626449000
 
-# Estados temporários por usuário
-estados = {}
-
-# Configurações de log
+# Logs
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# Comando de inicialização
+# Mensagem de boas-vindas
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot de comprovantes iniciado com sucesso!")
+    await update.message.reply_text("🤖 Bot de leitura de comprovantes iniciado com sucesso!")
 
-# Quando enviar imagem ou PDF
+# Captura de imagens e documentos
 async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
     if update.message.photo:
-        file = await update.message.photo[-1].get_file()
+        await processar_comprovante(update, context, "foto")
     elif update.message.document:
-        file = await update.message.document.get_file()
-    else:
-        await update.message.reply_text("❌ Formato não suportado.")
-        return
+        await processar_comprovante(update, context, "documento")
+    elif update.message.text:
+        await salvar_comprovante_manual(update, context)
 
-    caminho = f"temp_{user_id}.jpg"
-    await file.download_to_drive(caminho)
+# Handler para marcar comprovantes pagos
+async def verificar_pagamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await marcar_como_pago(update, context)
 
-    resultado = processar_comprovante(caminho)
-    if resultado:
-        valor, parcelas, horario, taxa, liquido = resultado
-        mensagem = (
-            f"📄 Comprovante analisado:\n"
-            f"💰 Valor bruto: R$ {valor}\n"
-            f"💳 Parcelas: {parcelas}\n"
-            f"⏰ Horário: {horario}\n"
-            f"📉 Taxa aplicada: {taxa}\n"
-            f"✅ Valor líquido a pagar: R$ {liquido}"
-        )
-        await update.message.reply_text(mensagem)
-    else:
-        estados[user_id] = {"etapa": "valor"}
-        await update.message.reply_text("❌ Não consegui ler o valor.\nDigite manualmente como: *1234,56*", parse_mode="Markdown")
+# Tratamento de erros
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Erro detectado: {context.error}")
+    if update and hasattr(update, 'effective_message') and update.effective_message:
+        await update.effective_message.reply_text("⚠️ Ocorreu um erro. Verifique o conteúdo do comprovante.")
 
-# Quando digitar mensagem de texto
-async def receber_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    texto = update.message.text.strip()
+# Agendamento do total a cada hora
+async def agendar_envio_total(application):
+    while True:
+        await enviar_total_a_pagar(application)
+        await asyncio.sleep(3600)  # 1 hora
 
-    if user_id not in estados:
-        return
+# Inicializador
+async def main():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    etapa = estados[user_id].get("etapa")
+    # Comandos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), receber_arquivo))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex("✅"), verificar_pagamento))
 
-    if etapa == "valor":
-        # Corrige ponto de milhar
-        texto = texto.replace(".", "").replace("R$", "").strip()
-        try:
-            valor = float(texto.replace(",", "."))
-            estados[user_id]["valor"] = valor
-            estados[user_id]["etapa"] = "parcelas"
-            await update.message.reply_text("Digite o número de parcelas (ex: 6):")
-        except:
-            await update.message.reply_text("❌ Valor inválido. Envie um número como 1234,56")
+    # Tratamento de erro
+    application.add_error_handler(error_handler)
 
-    elif etapa == "parcelas":
-        try:
-            parcelas = int(texto)
-            estados[user_id]["parcelas"] = parcelas
-            estados[user_id]["etapa"] = "horario"
-            await update.message.reply_text("Digite o horário da venda (ex: 15:47):")
-        except:
-            await update.message.reply_text("❌ Parcelas inválidas. Exemplo: 3")
+    # Iniciar agendamento em paralelo
+    application.job_queue.run_once(lambda context: asyncio.create_task(agendar_envio_total(application)), when=5)
 
-    elif etapa == "horario":
-        horario = texto
-        dados = estados[user_id]
-        resultado = salvar_comprovante_manual(
-            dados["valor"], dados["parcelas"], horario
-        )
-        valor, parcelas, horario, taxa, liquido = resultado
-        mensagem = (
-            f"📄 Comprovante analisado:\n"
-            f"💰 Valor bruto: R$ {valor:.2f}\n"
-            f"💳 Parcelas: {parcelas}x\n"
-            f"⏰ Horário: {horario}\n"
-            f"📉 Taxa aplicada: {taxa}\n"
-            f"✅ Valor líquido a pagar: R$ {liquido}"
-        )
-        await update.message.reply_text(mensagem)
-        del estados[user_id]
-
-# Inicialização
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, receber_arquivo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_texto))
-    app.run_polling()
+    print("Bot rodando...")
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
