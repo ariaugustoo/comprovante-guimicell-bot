@@ -1,77 +1,125 @@
-import pytesseract
-from PIL import Image
 from datetime import datetime
-import re
 
-# Tabela de taxas de cartão parcelado (Guimicell)
-TAXAS_CREDITO = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
-    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
-    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
+# Taxas por quantidade de parcelas
+TAXAS_CARTAO = {
+    1: 4.39,
+    2: 5.19,
+    3: 6.19,
+    4: 6.59,
+    5: 7.19,
+    6: 8.29,
+    7: 9.19,
+    8: 9.99,
+    9: 10.29,
+    10: 10.88,
+    11: 11.99,
+    12: 12.52,
+    13: 13.69,
+    14: 14.19,
+    15: 14.69,
+    16: 15.19,
+    17: 15.89,
+    18: 16.84
 }
 
-def extrair_info_ocr(caminho_imagem):
-    imagem = Image.open(caminho_imagem)
-    texto = pytesseract.image_to_string(imagem, lang='por')
+comprovantes = {}
 
-    valor = extrair_valor(texto)
-    horario = extrair_horario(texto)
-    parcelas = extrair_parcelas(texto)
+def formatar_reais(valor):
+    return f"R$ {valor:,.2f}".replace(".", "v").replace(",", ".").replace("v", ",")
 
-    return valor, horario, parcelas
+def processar_comprovante(caminho_imagem, user_id):
+    # (A leitura OCR da imagem pode ser implementada aqui futuramente)
+    return "🔍 Leitura OCR ainda não implementada. Envie o valor manualmente: `6438,76 pix` ou `7.899,99 10x`."
 
-def extrair_valor(texto):
-    padrao = r'R?\$?\s?(\d{1,3}(?:[.,]?\d{3})*[.,]\d{2})'
-    valores = re.findall(padrao, texto)
-    if valores:
-        valor = valores[0].replace('.', '').replace(',', '.')
-        return float(valor)
-    return None
+def salvar_comprovante_manual(valor_str, parcelas, taxa_pix, user_id):
+    try:
+        valor = float(valor_str)
+    except ValueError:
+        return "❌ Valor inválido. Tente no formato: `150,00 3x` ou `6.438,76 pix`"
 
-def extrair_horario(texto):
-    padrao = r'(\d{2}:\d{2})'
-    match = re.search(padrao, texto)
-    return match.group(1) if match else datetime.now().strftime('%H:%M')
+    if user_id not in comprovantes:
+        comprovantes[user_id] = []
 
-def extrair_parcelas(texto):
-    padrao = r'(\d{1,2})x'
-    match = re.search(padrao, texto.lower())
-    return int(match.group(1)) if match else 1
+    data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-def aplicar_taxa(valor, parcelas):
-    if parcelas == 1:
-        taxa = 0.2  # 0.2% para PIX
+    if taxa_pix:
+        taxa_percentual = taxa_pix
+        valor_liquido = round(valor * (1 - taxa_percentual / 100), 2)
+        tipo = "PIX"
     else:
-        taxa = TAXAS_CREDITO.get(parcelas, 16.84)
-    liquido = valor * (1 - taxa / 100)
-    return round(liquido, 2), taxa
+        taxa_percentual = TAXAS_CARTAO.get(parcelas, 0)
+        valor_liquido = round(valor * (1 - taxa_percentual / 100), 2)
+        tipo = f"{parcelas}x no cartão"
 
-def processar_comprovante(caminho, context, tipo):
-    valor, horario, parcelas = extrair_info_ocr(caminho)
-
-    if tipo == 'manual':
-        return None  # será tratado externamente
-
-    valor_liquido, taxa_aplicada = aplicar_taxa(valor, parcelas)
-
-    return {
-        'valor_bruto': valor,
-        'parcelas': parcelas,
-        'horario': horario,
-        'taxa': taxa_aplicada,
-        'valor_liquido': valor_liquido,
-        'pago': False,
-        'data': datetime.now().strftime('%d/%m/%Y'),
+    dados = {
+        "valor_bruto": valor,
+        "parcelas": parcelas,
+        "taxa": taxa_percentual,
+        "valor_liquido": valor_liquido,
+        "data_hora": data_hora,
+        "pago": False,
+        "tipo": tipo
     }
 
-def salvar_comprovante_manual(valor, parcelas, horario):
-    valor_liquido, taxa_aplicada = aplicar_taxa(valor, parcelas)
-    return {
-        'valor_bruto': valor,
-        'parcelas': parcelas,
-        'horario': horario or datetime.now().strftime('%H:%M'),
-        'taxa': taxa_aplicada,
-        'valor_liquido': valor_liquido,
-        'pago': False,
-        'data': datetime.now().strftime('%d/%m/%Y'),
-    }
+    comprovantes[user_id].append(dados)
+
+    return f"""
+📄 *Comprovante registrado:*
+💰 Valor bruto: {formatar_reais(valor)}
+💳 Parcelas: {parcelas if not taxa_pix else 'N/A'}
+⏰ Horário: {data_hora}
+📉 Taxa aplicada: {taxa_percentual:.2f}%
+✅ Valor líquido a pagar: {formatar_reais(valor_liquido)}
+    """.strip()
+
+def marcar_comprovante_pago(user_id):
+    if user_id not in comprovantes or not comprovantes[user_id]:
+        return False
+    for comprovante in reversed(comprovantes[user_id]):
+        if not comprovante["pago"]:
+            comprovante["pago"] = True
+            return True
+    return False
+
+def calcular_total_pendente(user_id):
+    if user_id not in comprovantes:
+        return 0.0
+    return sum(c["valor_liquido"] for c in comprovantes[user_id] if not c["pago"])
+
+def calcular_total_geral(user_id):
+    if user_id not in comprovantes:
+        return 0.0
+    return sum(c["valor_liquido"] for c in comprovantes[user_id])
+
+def listar_comprovantes(user_id, pagos=False):
+    if user_id not in comprovantes or not comprovantes[user_id]:
+        return "📂 Nenhum comprovante encontrado."
+
+    lista = [c for c in comprovantes[user_id] if c["pago"] == pagos]
+    if not lista:
+        return "📂 Nenhum comprovante encontrado neste status."
+
+    status = "✅ *Pagos*" if pagos else "🕒 *Pendentes*"
+    mensagem = [f"{status}:\n"]
+    for i, c in enumerate(lista, 1):
+        mensagem.append(
+            f"*{i}. {c['tipo']}*\n"
+            f"💰 {formatar_reais(c['valor_bruto'])} → {formatar_reais(c['valor_liquido'])}\n"
+            f"📉 {c['taxa']:.2f}% | ⏰ {c['data_hora']}\n"
+        )
+    return "\n".join(mensagem)
+
+def get_ultimo_comprovante(user_id):
+    if user_id not in comprovantes or not comprovantes[user_id]:
+        return "📂 Nenhum comprovante encontrado."
+
+    c = comprovantes[user_id][-1]
+    return f"""
+📌 *Último Comprovante:*
+💰 Valor bruto: {formatar_reais(c['valor_bruto'])}
+💳 Parcelas: {c['parcelas'] if c['tipo'] != 'PIX' else 'N/A'}
+⏰ Horário: {c['data_hora']}
+📉 Taxa aplicada: {c['taxa']:.2f}%
+✅ Valor líquido a pagar: {formatar_reais(c['valor_liquido'])}
+🧾 Status: {'✅ Pago' if c['pago'] else '🕒 Pendente'}
+""".strip()
