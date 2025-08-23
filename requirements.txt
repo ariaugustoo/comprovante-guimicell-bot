@@ -1,4 +1,4 @@
-python-telegram-bot[job-queue]==20.8
+python-telegram-bot==20.8
+pillow
 pytesseract
-Pillow
-httpx
+httpx~=0.26.0
