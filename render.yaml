@@ -1,9 +1,9 @@
 services:
-  - type: web
+  - type: worker
     name: comprovante-guimicell-bot
-    runtime: python
-    buildCommand: ""
+    env: python
+    region: oregon
+    buildCommand: pip install -r requirements.txt
     startCommand: python3 main.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.12
+    repo: https://github.com/ariaugustoo/comprovante-guimicell-bot
+    branch: main
