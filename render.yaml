@@ -1,8 +1,7 @@
 services:
   - type: web
-    name: bot-comprovante-dbh
+    name: comprovante-guimicell-bot
     env: python
-    region: oregon
     plan: free
     buildCommand: ""
     startCommand: "python3 main.py"
