@@ -1,4 +1,5 @@
-python-telegram-bot==20.3
+python-telegram-bot[webhooks]==20.3
 Flask==2.2.5
 pillow
 pytesseract
+httpx~=0.24.0
