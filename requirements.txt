@@ -1,5 +1,5 @@
 python-telegram-bot==20.8
-flask
+Flask
 pytesseract
 opencv-python
 pillow
