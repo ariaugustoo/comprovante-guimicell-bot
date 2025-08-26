@@ -1,9 +1,12 @@
 services:
   - type: web
     name: comprovante-guimicell-bot
+    runtime: python
     env: python
+    region: oregon
     plan: free
-    branch: main
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python3 main.py"
-    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 main.py
+    envVars:
+      - key: PORT
+        value: 10000
