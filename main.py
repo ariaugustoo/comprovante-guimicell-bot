@@ -1,266 +1,168 @@
-import os
-import re
 import logging
-import asyncio
-from datetime import datetime
-from typing import Optional
-
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from processador import processar_comprovante, armazenar_comprovante, calcular_total_pendente, listar_comprovantes, marcar_comprovante_como_pago, obter_ultimo_comprovante
 
-import processador as proc
+# === CONFIGURAÇÕES ===
+TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
+GROUP_ID = -1002626449000
+TAXA_PIX = 0.2  # 0,2%
 
-# =========================
-# CONFIGURAÇÕES DO PROJETO
-# =========================
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA")
-GROUP_ID = int(os.getenv("GROUP_ID", "-1002626449000"))
-PUBLIC_URL = os.getenv(
-    "PUBLIC_URL",
-    "https://comprovante-guimicell-bot-vmvr.onrender.com"
-)
-
-# Logging
+# === LOG ===
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger("guimicell-bot")
-
-
-# =========================
-#   TEXT HELPERS
-# =========================
-AJUDA_TXT = (
-    "🧾 *Comandos e formatos*\n\n"
-    "• Para *PIX*: `1234,56 pix`\n"
-    "• Para *Cartão*: `1234,56 3x` (1x a 18x)\n"
-    "• Marcar último como pago: envie `✅`\n"
-    "• `total que devo` – soma dos *pendentes*\n"
-    "• `total geral` – pagos + pendentes\n"
-    "• `listar pendentes` – últimos pendentes\n"
-    "• `listar pagos` – últimos pagos\n"
-    "• `último comprovante` – mostra o último registro\n\n"
-    "_Dica:_ valores podem ter vírgula ou ponto. Ex: `6.438,76 10x`"
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 
-async def send_to_group(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    try:
-        await context.bot.send_message(chat_id=GROUP_ID, text=text, parse_mode="HTML")
-    except Exception as e:
-        logger.exception("Falha ao enviar mensagem ao grupo: %s", e)
+# === MENSAGEM DE AJUDA ===
+AJUDA = """
+📌 *Comandos disponíveis:*
+• `valor pix` → Aplica 0,2% de taxa e responde valor líquido
+• `valor 3x` → Aplica taxa de crédito conforme parcelas
+• `✅` → Marca último comprovante como pago
+• `total que devo` → Mostra o total de repasses pendentes
+• `listar pendentes` → Lista comprovantes pendentes
+• `listar pagos` → Lista comprovantes já pagos
+• `último comprovante` → Mostra último comprovante enviado
+• `total geral` → Total geral de valores processados
+"""
 
-
-# =========================
-#   HANDLERS
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "🤖 Bot de comprovantes ativo via webhook!\n\n" + AJUDA_TXT,
-        parse_mode="Markdown"
-    )
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(AJUDA_TXT, parse_mode="Markdown")
-
-async def handle_emoji_pago(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Marca o último comprovante pendente como pago."""
-    row = proc.marcar_ultimo_como_pago()
-    if not row:
-        await update.message.reply_text("⚠️ Não encontrei pendentes para marcar como pagos.")
+# === HANDLER PRINCIPAL ===
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None or update.message.chat_id != GROUP_ID:
         return
 
-    msg = (
-        "✅ <b>Marcado como pago</b>\n"
-        f"ID: <code>{row['id']}</code>\n"
-        f"💰 Bruto: {proc.fmt_brl(row['gross'])}\n"
-        f"📉 Taxa: {row['fee_percent']:.2f}%\n"
-        f"💳 Parcelas: {row['installments'] or '-'}\n"
-        f"✅ Líquido: {proc.fmt_brl(row['net'])}"
-    )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    message = update.message
+    text = message.text.strip() if message.text else ""
+    fotos = message.photo
+    documento = message.document
 
-async def handle_totais(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text.lower().strip()
-
-    if "total que devo" in text:
-        soma = proc.somar_pendentes()
-        await update.message.reply_text(f"🧮 <b>Total pendente</b>: {proc.fmt_brl(soma)}", parse_mode="HTML")
-        return
-
-    if "total geral" in text:
-        pend = proc.somar_pendentes()
-        pagos = proc.somar_pagos()
-        total = pend + pagos
-        msg = (
-            "🧮 <b>Totais</b>\n"
-            f"• Pendente: {proc.fmt_brl(pend)}\n"
-            f"• Pago: {proc.fmt_brl(pagos)}\n"
-            f"• <b>Geral:</b> {proc.fmt_brl(total)}"
-        )
-        await update.message.reply_text(msg, parse_mode="HTML")
-
-async def handle_listagens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text.lower().strip()
-
-    if "listar pendentes" in text:
-        items = proc.listar(pagos=False, limit=15)
-        if not items:
-            await update.message.reply_text("✅ Não há pendências.")
-            return
-        linhas = ["⏳ <b>Pendentes (últimos)</b>"]
-        for r in items:
-            linhas.append(
-                f"• ID {r['id']} — {proc.fmt_brl(r['net'])} "
-                f"({r['type'].upper()} {f'{r['installments']}x' if r['installments'] else ''})"
+    if fotos:
+        await message.reply_text("🧐 Lendo imagem, um momento...")
+        resultado = await processar_comprovante(message, context.bot, tipo="foto")
+        if resultado:
+            armazenar_comprovante(resultado)
+            resposta = (
+                f"📄 Comprovante analisado:\n"
+                f"💰 Valor bruto: R$ {resultado['valor_bruto']:.2f}\n"
+                f"💳 Parcelas: {(f\"{resultado['parcelas']}x\" if resultado['parcelas'] else 'N/A')}\n"
+                f"⏰ Horário: {resultado['horario']}\n"
+                f"📉 Taxa aplicada: {resultado['taxa_aplicada']}%\n"
+                f"✅ Valor líquido a pagar: R$ {resultado['valor_liquido']:.2f}"
             )
-        await update.message.reply_text("\n".join(linhas), parse_mode="HTML")
+            await message.reply_text(resposta)
+        else:
+            await message.reply_text("❌ Não consegui entender a imagem. Envie o valor manualmente.")
         return
 
-    if "listar pagos" in text:
-        items = proc.listar(pagos=True, limit=15)
-        if not items:
-            await update.message.reply_text("ℹ️ Ainda não há pagos registrados.")
-            return
-        linhas = ["🟩 <b>Pagos (últimos)</b>"]
-        for r in items:
-            linhas.append(
-                f"• ID {r['id']} — {proc.fmt_brl(r['net'])} "
-                f"({r['type'].upper()} {f'{r['installments']}x' if r['installments'] else ''})"
+    if documento and documento.file_name.endswith(".pdf"):
+        await message.reply_text("🧐 Lendo PDF, um momento...")
+        resultado = await processar_comprovante(message, context.bot, tipo="pdf")
+        if resultado:
+            armazenar_comprovante(resultado)
+            resposta = (
+                f"📄 Comprovante analisado:\n"
+                f"💰 Valor bruto: R$ {resultado['valor_bruto']:.2f}\n"
+                f"💳 Parcelas: {(f\"{resultado['parcelas']}x\" if resultado['parcelas'] else 'N/A')}\n"
+                f"⏰ Horário: {resultado['horario']}\n"
+                f"📉 Taxa aplicada: {resultado['taxa_aplicada']}%\n"
+                f"✅ Valor líquido a pagar: R$ {resultado['valor_liquido']:.2f}"
             )
-        await update.message.reply_text("\n".join(linhas), parse_mode="HTML")
+            await message.reply_text(resposta)
+        else:
+            await message.reply_text("❌ Não consegui ler o PDF. Envie o valor manualmente.")
         return
 
-    if "último comprovante" in text or "ultimo comprovante" in text:
-        r = proc.ultimo()
-        if not r:
-            await update.message.reply_text("ℹ️ Nenhum comprovante registrado ainda.")
-            return
-        msg = proc.formatar_resposta(r, titulo="📄 Último comprovante")
-        await update.message.reply_text(msg, parse_mode="HTML")
-
-
-PIX_RE = re.compile(r"^\s*([\d\.,]+)\s*pix\s*$", re.IGNORECASE)
-CARD_RE = re.compile(r"^\s*([\d\.,]+)\s*(\d{1,2})x\s*$", re.IGNORECASE)
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Processa mensagens de texto: PIX, Cartão e consultas."""
-    txt = (update.message.text or "").strip()
-
-    # ✅ marca pago (se o usuário apenas enviar o emoji)
-    if txt == "✅":
-        await handle_emoji_pago(update, context)
+    if "pix" in text.lower():
+        try:
+            valor = float(text.lower().replace("pix", "").replace("r$", "").replace(",", ".").strip())
+            taxa = TAXA_PIX
+            liquido = valor * (1 - taxa / 100)
+            await message.reply_text(
+                f"💸 *PIX com taxa de {taxa}%*\n"
+                f"Valor bruto: R$ {valor:.2f}\n"
+                f"Valor líquido a repassar: R$ {liquido:.2f}"
+            )
+            armazenar_comprovante({
+                'valor_bruto': valor,
+                'valor_liquido': liquido,
+                'taxa_aplicada': taxa,
+                'horario': message.date.strftime("%H:%M"),
+                'parcelas': None,
+                'pago': False
+            })
+        except:
+            await message.reply_text("❌ Não entendi o valor. Ex: `6438,76 pix`")
         return
 
-    # Listagens e totais
-    low = txt.lower()
-    if any(k in low for k in ["total que devo", "total geral"]):
-        await handle_totais(update, context)
+    if "x" in text.lower() and "pix" not in text.lower():
+        try:
+            partes = text.lower().split("x")
+            valor = float(partes[0].replace("r$", "").replace(",", ".").strip())
+            parcelas = int(partes[1].strip())
+            from processador import calcular_taxa_cartao
+            taxa = calcular_taxa_cartao(parcelas)
+            liquido = valor * (1 - taxa / 100)
+            await message.reply_text(
+                f"💳 *Cartão em {parcelas}x com taxa de {taxa}%*\n"
+                f"Valor bruto: R$ {valor:.2f}\n"
+                f"Valor líquido a repassar: R$ {liquido:.2f}"
+            )
+            armazenar_comprovante({
+                'valor_bruto': valor,
+                'valor_liquido': liquido,
+                'taxa_aplicada': taxa,
+                'horario': message.date.strftime("%H:%M"),
+                'parcelas': parcelas,
+                'pago': False
+            })
+        except:
+            await message.reply_text("❌ Formato inválido. Ex: `6899,99 10x`")
         return
 
-    if any(k in low for k in ["listar pendentes", "listar pagos", "último comprovante", "ultimo comprovante"]):
-        await handle_listagens(update, context)
+    if "✅" in text:
+        msg = marcar_comprovante_como_pago()
+        await message.reply_text(msg)
         return
 
-    # PIX
-    m = PIX_RE.match(txt)
-    if m:
-        bruto = proc.parse_money(m.group(1))
-        if bruto is None:
-            await update.message.reply_text("⚠️ Valor inválido. Exemplo: `6438,76 pix`", parse_mode="Markdown")
-            return
-        resp = proc.registrar_pix(bruto, author=update.effective_user)
-        await update.message.reply_text(resp, parse_mode="HTML")
+    if "total que devo" in text.lower():
+        total = calcular_total_pendente()
+        await message.reply_text(f"💰 Total pendente a pagar: R$ {total:.2f}")
         return
 
-    # Cartão
-    m = CARD_RE.match(txt)
-    if m:
-        bruto = proc.parse_money(m.group(1))
-        parcelas = int(m.group(2))
-        if bruto is None or not (1 <= parcelas <= 18):
-            await update.message.reply_text("⚠️ Formato inválido. Ex: `7899,99 10x` (1 a 18x).")
-            return
-        resp = proc.registrar_cartao(bruto, parcelas, author=update.effective_user)
-        await update.message.reply_text(resp, parse_mode="HTML")
+    if "listar pendentes" in text.lower():
+        lista = listar_comprovantes(pago=False)
+        await message.reply_text(lista)
         return
 
-    # Caso não reconheça o padrão
-    await update.message.reply_text(
-        "❓ Não reconheci o formato. Use:\n"
-        "• `1234,56 pix`\n"
-        "• `1234,56 3x`\n"
-        "ou envie `ajuda`",
-        parse_mode="Markdown"
-    )
-
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tenta ler PDFs (texto nativo). Se não conseguir, pede o valor manual."""
-    document = update.message.document
-    if not document:
+    if "listar pagos" in text.lower():
+        lista = listar_comprovantes(pago=True)
+        await message.reply_text(lista)
         return
 
-    file = await document.get_file()
-    file_path = await file.download_to_drive(custom_path="upload_" + document.file_unique_id)
+    if "último comprovante" in text.lower():
+        ultimo = obter_ultimo_comprovante()
+        await message.reply_text(ultimo)
+        return
 
-    valor, parcelas, horario = proc.extrair_de_pdf(file_path)
-    if valor:
-        # Se PDF tinha valor legível, assumir PIX por padrão e pedir confirmação
-        resp = proc.registrar_pix(valor, horario=horario, author=update.effective_user)
-        await update.message.reply_text("📎 PDF lido (texto). Se estiver correto, ok.\n" + resp, parse_mode="HTML")
-    else:
-        await update.message.reply_text(
-            "📎 Recebi o arquivo mas não consegui ler o valor.\n"
-            "Envie no formato: `1234,56 pix` ou `1234,56 3x`.",
-            parse_mode="Markdown"
-        )
+    if "total geral" in text.lower():
+        from processador import calcular_total_geral
+        total = calcular_total_geral()
+        await message.reply_text(f"📊 Total geral de valores processados: R$ {total:.2f}")
+        return
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sem OCR pesado por padrão. Pede entrada manual amigável."""
-    await update.message.reply_text(
-        "🖼️ Recebi a imagem do comprovante.\n"
-        "Para agilizar, envie o valor no formato: `1234,56 pix` ou `1234,56 3x`.",
-        parse_mode="Markdown"
-    )
+    if "ajuda" in text.lower():
+        await message.reply_markdown(AJUDA)
+        return
 
-
-# =========================
-#   MAIN (WEBHOOK SERVER)
-# =========================
-def main() -> None:
-    proc.init_db()  # garante o banco
-
-    application = Application.builder().token(TOKEN).build()
-
-    # Comandos
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("ajuda", ajuda))
-
-    # Documentos e fotos
-    application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-
-    # Texto
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Inicia servidor webhook (aiohttp interno do PTB)
-    port = int(os.environ.get("PORT", "10000"))
-    logger.info("Subindo webhook em 0.0.0.0:%s", port)
-
-    application.run_webhook(
+# === INICIAR APLICAÇÃO ===
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.ALL, handle))
+    print("🤖 Bot rodando com webhook...")
+    app.run_webhook(
         listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,  # rota secreta
-        webhook_url=f"{PUBLIC_URL}/{TOKEN}",
-        drop_pending_updates=True,
+        port=10000,
+        url_path=TOKEN.split(":")[0],
+        webhook_url=f"https://comprovante-guimicell-bot-vmvr.onrender.com/{TOKEN.split(':')[0]}"
     )
-
-
-if __name__ == "__main__":
-    main()
