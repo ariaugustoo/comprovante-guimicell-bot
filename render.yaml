@@ -1,10 +1,13 @@
 services:
   - type: web
-    name: comprovante-guimicell-bot
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "./start.sh"
+    name: comprovantes-bot
+    runtime: python
+    buildCommand: ""
+    startCommand: python3 main.py
     envVars:
+      - key: BOT_TOKEN
+        sync: true
+      - key: GROUP_ID
+        sync: true
       - key: PORT
-        value: 10000
+        sync: true
