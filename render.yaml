@@ -2,13 +2,10 @@ services:
   - type: web
     name: comprovante-guimicell-bot
     env: python
-    autoDeploy: true
-    buildCommand: pip install -r requirements.txt
+    region: oregon
+    plan: free
+    buildCommand: ""
     startCommand: python3 main.py
     envVars:
-      - key: TELEGRAM_TOKEN
-        value: 8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA
-      - key: GROUP_ID
-        value: "-1002626449000"
-      - key: PUBLIC_URL
-        value: https://comprovante-guimicell-bot-vmvr.onrender.com
+      - key: PORT
+        value: 10000
