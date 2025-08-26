@@ -1,88 +1,191 @@
 import re
 from datetime import datetime
+from telegram import Bot, Message
+import pytesseract
+import cv2
+import numpy as np
+from PIL import Image
+from io import BytesIO
 
+TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
+GROUP_ID = -1002122662652
+
+pendentes = []
+pagos = []
+
+TAXA_PIX = 0.002
 TAXAS_CARTAO = {
-    1: 4.39,
-    2: 5.19,
-    3: 6.19,
-    4: 6.59,
-    5: 7.19,
-    6: 8.29,
-    7: 9.19,
-    8: 9.99,
-    9: 10.29,
-    10: 10.88,
-    11: 11.99,
-    12: 12.52,
-    13: 13.69,
-    14: 14.19,
-    15: 14.69,
-    16: 15.19,
-    17: 15.89,
-    18: 16.84,
+    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719, 6: 0.0829,
+    7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
+    13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
 }
 
+def extrair_texto_imagem(file_bytes):
+    imagem = Image.open(BytesIO(file_bytes))
+    imagem_cv = cv2.cvtColor(np.array(imagem), cv2.COLOR_RGB2BGR)
+    return pytesseract.image_to_string(imagem_cv)
+
 def normalizar_valor(valor_str):
-    valor_str = valor_str.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
-    try:
-        return float(valor_str)
-    except ValueError:
-        return None
+    return float(valor_str.replace(".", "").replace(",", "."))
 
-def processar_comprovante(texto, tipo=None, parcelas=None):
-    valor_bruto = None
-    horario = None
-    valor_liquido = None
-    taxa = 0.0
+def calcular_liquido(valor, tipo, parcelas=1):
+    taxa = TAXA_PIX if tipo == "pix" else TAXAS_CARTAO.get(parcelas, 0)
+    return round(valor * (1 - taxa), 2), taxa
 
-    padrao_valor = r'((?:\d{1,3}(?:\.\d{3})*|\d+)(?:,\d{2})?)'
-    padrao_horario = r'(\d{2}:\d{2})'
-
-    valor_match = re.search(padrao_valor, texto)
-    if valor_match:
-        valor_bruto = normalizar_valor(valor_match.group(1))
-
-    horario_match = re.search(padrao_horario, texto)
-    if horario_match:
-        horario = horario_match.group(1)
-
-    if tipo == "pix":
-        taxa = 0.2
-    elif tipo == "cartao" and parcelas in TAXAS_CARTAO:
-        taxa = TAXAS_CARTAO[parcelas]
-    else:
-        taxa = 0.0
-
-    if valor_bruto is not None:
-        valor_liquido = valor_bruto * (1 - taxa / 100)
-
-    return {
-        "valor_bruto": valor_bruto,
+def registrar_comprovante(valor, tipo, horario, parcelas=1):
+    liquido, taxa = calcular_liquido(valor, tipo, parcelas)
+    comprovante = {
+        "valor": valor,
+        "tipo": tipo,
         "horario": horario,
         "parcelas": parcelas,
         "taxa": taxa,
-        "valor_liquido": valor_liquido
+        "liquido": liquido
     }
+    pendentes.append(comprovante)
+    return comprovante
 
-def calcular_valor_liquido(valor, tipo, parcelas=None):
-    taxa = 0.0
-    if tipo == "pix":
-        taxa = 0.2
-    elif tipo == "cartao" and parcelas in TAXAS_CARTAO:
-        taxa = TAXAS_CARTAO[parcelas]
+def responder_mensagem(bot: Bot, message: Message, texto: str):
+    bot.send_message(chat_id=GROUP_ID, text=texto)
 
-    valor_liquido = valor * (1 - taxa / 100)
-    return valor_liquido, taxa
+def processar_mensagem(bot: Bot, message: Message):
+    texto = message.text.lower() if message.text else ""
 
-def formatar_comprovante(dados):
-    mensagem = "📄 *Comprovante analisado:*\n"
-    if dados["valor_bruto"] is not None:
-        mensagem += f"💰 *Valor bruto:* R$ {dados['valor_bruto']:,.2f}\n"
-    if dados["parcelas"] is not None:
-        mensagem += f"💳 *Parcelas:* {dados['parcelas']}x\n"
-    if dados["horario"] is not None:
-        mensagem += f"⏰ *Horário:* {dados['horario']}\n"
-    mensagem += f"📉 *Taxa aplicada:* {dados['taxa']}%\n"
-    if dados["valor_liquido"] is not None:
-        mensagem += f"✅ *Valor líquido a pagar:* R$ {dados['valor_liquido']:,.2f}\n"
-    return mensagem
+    if message.photo:
+        responder_mensagem(bot, message, "🧾 Imagem recebida! Por favor, digite o valor e o tipo de pagamento (ex: 5899,99 pix ou 3.999,90 10x)")
+        return
+
+    if "pix" in texto:
+        match = re.search(r"([\d.,]+)\s*pix", texto)
+        if match:
+            valor = normalizar_valor(match.group(1))
+            horario = datetime.now().strftime("%H:%M")
+            comprovante = registrar_comprovante(valor, "pix", horario)
+            resposta = (
+                f"📄 Comprovante analisado:\n"
+                f"💰 Valor bruto: R$ {comprovante['valor']:.2f}\n"
+                f"💳 Parcelas: À vista (PIX)\n"
+                f"⏰ Horário: {comprovante['horario']}\n"
+                f"📉 Taxa aplicada: {comprovante['taxa']*100:.2f}%\n"
+                f"✅ Valor líquido a pagar: R$ {comprovante['liquido']:.2f}"
+            )
+            responder_mensagem(bot, message, resposta)
+        return
+
+    match_cartao = re.search(r"([\d.,]+)\s*(\d{1,2})x", texto)
+    if match_cartao:
+        valor = normalizar_valor(match_cartao.group(1))
+        parcelas = int(match_cartao.group(2))
+        horario = datetime.now().strftime("%H:%M")
+        comprovante = registrar_comprovante(valor, "cartao", horario, parcelas)
+        resposta = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: R$ {comprovante['valor']:.2f}\n"
+            f"💳 Parcelas: {comprovante['parcelas']}x\n"
+            f"⏰ Horário: {comprovante['horario']}\n"
+            f"📉 Taxa aplicada: {comprovante['taxa']*100:.2f}%\n"
+            f"✅ Valor líquido a pagar: R$ {comprovante['liquido']:.2f}"
+        )
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "✅" in texto:
+        if pendentes:
+            comprovante = pendentes.pop(0)
+            pagos.append(comprovante)
+            responder_mensagem(bot, message, "✅ Comprovante marcado como pago.")
+        else:
+            responder_mensagem(bot, message, "⚠️ Nenhum comprovante pendente para marcar como pago.")
+        return
+
+    if "listar pendentes" in texto:
+        if pendentes:
+            resposta = "📋 *Comprovantes Pendentes:*\n\n"
+            for c in pendentes:
+                resposta += (
+                    f"• 💰 R$ {c['valor']:.2f} - "
+                    f"{c['parcelas']}x - "
+                    f"⏰ {c['horario']} - "
+                    f"💸 Líquido: R$ {c['liquido']:.2f}\n"
+                )
+        else:
+            resposta = "✅ Nenhum comprovante pendente."
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "listar pagos" in texto:
+        if pagos:
+            resposta = "📗 *Comprovantes Pagos:*\n\n"
+            for c in pagos:
+                resposta += (
+                    f"• R$ {c['valor']:.2f} - "
+                    f"{c['parcelas']}x - "
+                    f"{c['horario']} - "
+                    f"💸 Líquido: R$ {c['liquido']:.2f}\n"
+                )
+        else:
+            resposta = "📗 Nenhum comprovante foi marcado como pago ainda."
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "último comprovante" in texto:
+        if pendentes:
+            c = pendentes[-1]
+            resposta = (
+                f"📌 Último Comprovante:\n"
+                f"💰 R$ {c['valor']:.2f} - "
+                f"{c['parcelas']}x - "
+                f"{c['horario']} - "
+                f"💸 Líquido: R$ {c['liquido']:.2f}"
+            )
+        else:
+            resposta = "⚠️ Nenhum comprovante registrado ainda."
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "total que devo" in texto:
+        total = sum(c['liquido'] for c in pendentes)
+        resposta = f"📊 Total em aberto (a pagar): R$ {total:.2f}"
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "total geral" in texto:
+        total = sum(c['liquido'] for c in pendentes + pagos)
+        resposta = f"📊 Total geral (todos os comprovantes): R$ {total:.2f}"
+        responder_mensagem(bot, message, resposta)
+        return
+
+    if "ajuda" in texto:
+        comandos = (
+            "🤖 *Comandos disponíveis:*\n\n"
+            "`1234,56 pix` → Registrar PIX\n"
+            "`7890,00 10x` → Registrar cartão parcelado\n"
+            "`✅` → Marcar como pago\n"
+            "`listar pendentes` → Ver pendentes\n"
+            "`listar pagos` → Ver pagos\n"
+            "`último comprovante` → Ver o último\n"
+            "`total que devo` → Soma pendentes\n"
+            "`total geral` → Soma de tudo\n"
+            "`ajuda` → Ver comandos"
+        )
+        responder_mensagem(bot, message, comandos)
+
+# Funções auxiliares para importações futuras (se quiser usar em dashboard)
+def listar_pendentes():
+    return pendentes
+
+def listar_pagos():
+    return pagos
+
+def marcar_como_pago():
+    if pendentes:
+        pagos.append(pendentes.pop(0))
+
+def obter_ultimo_comprovante():
+    return pendentes[-1] if pendentes else None
+
+def calcular_total_geral():
+    return sum(c["liquido"] for c in pendentes + pagos)
+
+def calcular_total_pendentes():
+    return sum(c["liquido"] for c in pendentes)
