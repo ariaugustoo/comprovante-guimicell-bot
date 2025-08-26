@@ -1,5 +1,5 @@
 python-telegram-bot==20.8
-pillow
 pytesseract
 opencv-python
-numpy
+pillow
+httpx~=0.26.0
