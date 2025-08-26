@@ -1,36 +1,45 @@
-import logging
+import os
+import re
+import asyncio
 from flask import Flask, request
-from telegram import Bot, Update
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from processador import processar_mensagem
 
 TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
 GROUP_ID = -1002122662652
-WEBHOOK_URL = f"https://comprovante-guimicell-bot-vmvr.onrender.com/{TOKEN}"
+WEBHOOK_URL = "https://comprovante-guimicell-bot-vmvr.onrender.com"
 
-bot = Bot(token=TOKEN)
+# Inicializa Flask e Telegram Application
 app = Flask(__name__)
+application = Application.builder().token(TOKEN).build()
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Comando /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot de comprovantes ativo!")
 
-@app.route('/')
-def home():
-    return '✅ Bot está rodando com webhook!', 200
+# Handler de mensagens
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message:
+        await processar_mensagem(update, context)
 
-@app.route(f"/{TOKEN}", methods=["POST"])
-def receber_mensagem():
-    try:
-        update = Update.de_json(request.get_json(force=True), bot)
-        if update.message:
-            processar_mensagem(bot, update.message)
-    except Exception as e:
-        logging.error(f"Erro ao processar mensagem: {e}")
-    return 'OK', 200
+# Registra comandos e mensagens
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.ALL, handle_message))
 
-@app.before_first_request
-def configurar_webhook():
-    bot.delete_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    logging.info("Webhook configurado com sucesso.")
+# Webhook do Telegram envia POST para cá
+@app.route("/", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put(update)
+    return "OK", 200
 
+# Inicia o app Flask e configura o webhook apenas 1 vez
 if __name__ == "__main__":
-    app.run(debug=True)
+    async def iniciar():
+        print("⚙️ Configurando webhook...")
+        await application.bot.set_webhook(WEBHOOK_URL)
+        print("✅ Webhook configurado com sucesso!")
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+    asyncio.run(iniciar())
