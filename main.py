@@ -24,7 +24,7 @@ def main():
     app.add_handler(CommandHandler("listar_pagos", listar_pagamentos))
     app.add_handler(CommandHandler("total_que_devo", calcular_total_pendente))
     app.add_handler(CommandHandler("total_geral", calcular_total_geral))
-    app.add_handler(CommandHandler("último_comprovante", ultimo_comprovante))
+    app.add_handler(CommandHandler("ultimo_comprovante", ultimo_comprovante))  # <- AQUI corrigido sem acento
     app.add_handler(CommandHandler("ajuda", ajuda))
     app.add_handler(MessageHandler(filters.ALL, processar_comprovante))
 
