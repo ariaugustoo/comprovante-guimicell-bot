@@ -1,10 +1,12 @@
 services:
   - type: web
     name: comprovante-guimicell-bot
-    env: python
-    plan: starter
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python3 main.py"
+    runtime: python
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 main.py
     envVars:
-      - key: TOKEN
-        value: "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg80IA"
+      - key: WEB_CONCURRENCY
+        value: "1"
+    plan: free
+    autoDeploy: true
