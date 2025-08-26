@@ -2,7 +2,7 @@ import os
 import logging
 from flask import Flask, request
 import telegram
-from processador import processar_mensagem
+from processador import processar_mensagem  # IMPORTA CORRETAMENTE
 
 TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
 GROUP_ID = -1002626449000
@@ -10,7 +10,6 @@ GROUP_ID = -1002626449000
 bot = telegram.Bot(token=TOKEN)
 app = Flask(__name__)
 
-# Ativa logs para debug
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
