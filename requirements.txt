@@ -1,5 +1,2 @@
-python-telegram-bot==20.8
-pillow
-pytesseract
-flask
-gunicorn
+pyTelegramBotAPI==4.15.2
+Flask==2.3.3
