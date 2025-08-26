@@ -1,6 +1,7 @@
-python-telegram-bot==20.8
 Flask
+python-telegram-bot==20.8
 pytesseract
 opencv-python
 pillow
 httpx
+requests
