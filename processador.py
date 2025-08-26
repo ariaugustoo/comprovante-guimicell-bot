@@ -1,129 +1,189 @@
-import datetime
+from telegram import Update
+from telegram.ext import CallbackContext
+import pytesseract
+from PIL import Image
+import cv2
+import numpy as np
+import io
 import re
+from datetime import datetime
 
+# Dicionário para armazenar comprovantes em memória
 comprovantes = []
 
-TAXAS_CARTAO = {
-    1: 4.39,
-    2: 5.19,
-    3: 6.19,
-    4: 6.59,
-    5: 7.19,
-    6: 8.29,
-    7: 9.19,
-    8: 9.99,
-    9: 10.29,
-    10: 10.88,
-    11: 11.99,
-    12: 12.52,
-    13: 13.69,
-    14: 14.19,
-    15: 14.69,
-    16: 15.19,
-    17: 15.89,
-    18: 16.84
+# Tabela de taxas
+taxas_cartao = {
+    1: 0.0439,  2: 0.0519,  3: 0.0619,  4: 0.0659,  5: 0.0719,  6: 0.0829,
+    7: 0.0919,  8: 0.0999,  9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
+    13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
 }
+taxa_pix = 0.002
 
-def aplicar_taxa(valor, taxa_percentual):
-    return round(valor * (1 - taxa_percentual / 100), 2)
+def extrair_texto_imagem(file_bytes):
+    image = Image.open(io.BytesIO(file_bytes))
+    img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    texto = pytesseract.image_to_string(img_cv, lang='por')
+    return texto
 
-def parse_valor(texto):
-    try:
-        texto = texto.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
-        return float(re.findall(r'\d+(?:\.\d+)?', texto)[0])
-    except:
-        return None
+def calcular_valor_liquido(valor_bruto, parcelas=None, tipo='pix'):
+    if tipo == 'pix':
+        taxa = taxa_pix
+    else:
+        taxa = taxas_cartao.get(parcelas, 0)
+    valor_liquido = valor_bruto * (1 - taxa)
+    return round(valor_liquido, 2), taxa
 
-def parse_parcelas(texto):
-    match = re.search(r'(\d{1,2})x', texto.lower())
-    if match:
-        return int(match.group(1))
-    return None
-
-def processar_mensagem(texto, autor):
-    texto = texto.lower()
-    valor = parse_valor(texto)
-    parcelas = parse_parcelas(texto)
-    horario = datetime.datetime.now().strftime("%H:%M")
-    tipo = "pix"
-    taxa_aplicada = 0.2
-
-    if "pix" in texto:
-        tipo = "pix"
-        taxa_aplicada = 0.2
-    elif parcelas:
-        tipo = f"{parcelas}x no cartão"
-        taxa_aplicada = TAXAS_CARTAO.get(parcelas, 0)
-
-    if valor is None:
-        return "❌ Valor não identificado. Envie no formato: `1234,56 pix` ou `1234,56 3x`."
-
-    valor_liquido = aplicar_taxa(valor, taxa_aplicada)
-
-    comprovante = {
-        "autor": autor,
-        "valor_bruto": valor,
-        "parcelas": parcelas if parcelas else 1,
-        "tipo": tipo,
-        "horario": horario,
-        "taxa": taxa_aplicada,
-        "valor_liquido": valor_liquido,
-        "pago": False
-    }
-    comprovantes.append(comprovante)
-
-    return (
+def formatar_resposta(valor_bruto, parcelas, horario, taxa, valor_liquido):
+    resposta = (
         "📄 *Comprovante analisado:*\n"
-        f"💰 Valor bruto: R$ {valor:,.2f}\n"
-        f"💳 Tipo: {tipo}\n"
-        f"⏰ Horário: {horario}\n"
-        f"📉 Taxa aplicada: {taxa_aplicada}%\n"
-        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
+        f"💰 *Valor bruto:* R$ {valor_bruto:,.2f}\n"
+        f"💳 *Parcelas:* {parcelas if parcelas else 'PIX'}\n"
+        f"⏰ *Horário:* {horario}\n"
+        f"📉 *Taxa aplicada:* {taxa * 100:.2f}%\n"
+        f"✅ *Valor líquido a pagar:* R$ {valor_liquido:,.2f}"
     )
+    return resposta
 
-def marcar_como_pago():
+def normalizar_valor(valor_str):
+    valor_str = valor_str.replace("R$", "").replace(" ", "").replace(",", ".")
+    return float(re.findall(r'\d+\.\d+|\d+', valor_str)[0])
+
+def processar_comprovante(update: Update, context: CallbackContext):
+    message = update.message
+    if message.text:
+        texto = message.text.lower()
+        if texto == "✅":
+            marcar_como_pago(update, context)
+            return
+        elif "pix" in texto:
+            try:
+                valor = normalizar_valor(texto)
+                valor_liquido, taxa = calcular_valor_liquido(valor, tipo='pix')
+                horario = datetime.now().strftime("%H:%M")
+                comprovantes.append({
+                    'valor_bruto': valor,
+                    'parcelas': None,
+                    'horario': horario,
+                    'valor_liquido': valor_liquido,
+                    'status': 'pendente'
+                })
+                resposta = formatar_resposta(valor, None, horario, taxa, valor_liquido)
+                message.reply_text(resposta, parse_mode='Markdown')
+            except:
+                message.reply_text("Erro ao processar valor PIX.")
+        elif "x" in texto:
+            try:
+                valor = normalizar_valor(texto)
+                parcelas = int(re.findall(r'(\d+)x', texto)[0])
+                valor_liquido, taxa = calcular_valor_liquido(valor, parcelas, tipo='cartao')
+                horario = datetime.now().strftime("%H:%M")
+                comprovantes.append({
+                    'valor_bruto': valor,
+                    'parcelas': parcelas,
+                    'horario': horario,
+                    'valor_liquido': valor_liquido,
+                    'status': 'pendente'
+                })
+                resposta = formatar_resposta(valor, parcelas, horario, taxa, valor_liquido)
+                message.reply_text(resposta, parse_mode='Markdown')
+            except:
+                message.reply_text("Erro ao processar valor com parcelas.")
+        return
+
+    if message.photo or message.document:
+        file = message.photo[-1].get_file() if message.photo else message.document.get_file()
+        file_bytes = file.download_as_bytearray()
+        texto_extraido = extrair_texto_imagem(file_bytes)
+
+        valores = re.findall(r'(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})', texto_extraido)
+        parcelas_match = re.search(r'(\d{1,2})x', texto_extraido.lower())
+        horario = datetime.now().strftime("%H:%M")
+
+        if valores:
+            valor = normalizar_valor(valores[0])
+            if parcelas_match:
+                parcelas = int(parcelas_match.group(1))
+                valor_liquido, taxa = calcular_valor_liquido(valor, parcelas, tipo='cartao')
+            else:
+                parcelas = None
+                valor_liquido, taxa = calcular_valor_liquido(valor, tipo='pix')
+
+            comprovantes.append({
+                'valor_bruto': valor,
+                'parcelas': parcelas,
+                'horario': horario,
+                'valor_liquido': valor_liquido,
+                'status': 'pendente'
+            })
+
+            resposta = formatar_resposta(valor, parcelas, horario, taxa, valor_liquido)
+            message.reply_text(resposta, parse_mode='Markdown')
+        else:
+            message.reply_text("❌ Não consegui identificar o valor. Por favor, envie o valor manualmente (ex: 1249,90 pix ou 1249,90 3x).")
+
+def marcar_como_pago(update: Update, context: CallbackContext):
     for comprovante in reversed(comprovantes):
-        if not comprovante["pago"]:
-            comprovante["pago"] = True
-            return "✅ Comprovante marcado como pago!"
-    return "Nenhum comprovante pendente encontrado."
+        if comprovante['status'] == 'pendente':
+            comprovante['status'] = 'pago'
+            update.message.reply_text("✅ Último comprovante marcado como pago!")
+            return
+    update.message.reply_text("Nenhum comprovante pendente para marcar como pago.")
 
-def listar_pendentes():
-    if not any(not c["pago"] for c in comprovantes):
-        return "✅ Nenhum comprovante pendente."
-    texto = "📋 *Comprovantes Pendentes:*\n"
-    for i, c in enumerate(comprovantes):
-        if not c["pago"]:
-            texto += f"{i+1}. R$ {c['valor_liquido']:.2f} - {c['tipo']} - {c['horario']}\n"
-    return texto
+def listar_pendentes(update: Update, context: CallbackContext):
+    pendentes = [c for c in comprovantes if c['status'] == 'pendente']
+    if not pendentes:
+        update.message.reply_text("Nenhum comprovante pendente.")
+        return
+    texto = "*📋 Comprovantes Pendentes:*\n\n"
+    for i, c in enumerate(pendentes, 1):
+        tipo = f"{c['parcelas']}x" if c['parcelas'] else "PIX"
+        texto += f"{i}. 💰 R$ {c['valor_bruto']:,.2f} | {tipo} | ⏰ {c['horario']}\n"
+    update.message.reply_text(texto, parse_mode='Markdown')
 
-def listar_pagos():
-    if not any(c["pago"] for c in comprovantes):
-        return "📄 Nenhum comprovante pago ainda."
-    texto = "✅ *Comprovantes Pagos:*\n"
-    for i, c in enumerate(comprovantes):
-        if c["pago"]:
-            texto += f"{i+1}. R$ {c['valor_liquido']:.2f} - {c['tipo']} - {c['horario']}\n"
-    return texto
+def listar_pagamentos(update: Update, context: CallbackContext):
+    pagos = [c for c in comprovantes if c['status'] == 'pago']
+    if not pagos:
+        update.message.reply_text("Nenhum comprovante marcado como pago.")
+        return
+    texto = "*📗 Comprovantes Pagos:*\n\n"
+    for i, c in enumerate(pagos, 1):
+        tipo = f"{c['parcelas']}x" if c['parcelas'] else "PIX"
+        texto += f"{i}. 💰 R$ {c['valor_bruto']:,.2f} | {tipo} | ⏰ {c['horario']}\n"
+    update.message.reply_text(texto, parse_mode='Markdown')
 
-def total_geral():
-    total = sum(c["valor_liquido"] for c in comprovantes)
-    return f"📊 Total geral (pagos + pendentes): R$ {total:,.2f}"
+def calcular_total_pendente(update: Update, context: CallbackContext):
+    total = sum(c['valor_liquido'] for c in comprovantes if c['status'] == 'pendente')
+    update.message.reply_text(f"💸 *Total a pagar (pendentes):* R$ {total:,.2f}", parse_mode='Markdown')
 
-def total_que_devo():
-    total = sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
-    return f"📌 Total que ainda deve ser pago: R$ {total:,.2f}"
+def calcular_total_geral(update: Update, context: CallbackContext):
+    total = sum(c['valor_liquido'] for c in comprovantes)
+    update.message.reply_text(f"💰 *Total geral de comprovantes:* R$ {total:,.2f}", parse_mode='Markdown')
 
-def ultimo_comprovante():
+def ultimo_comprovante(update: Update, context: CallbackContext):
     if not comprovantes:
-        return "Nenhum comprovante enviado ainda."
+        update.message.reply_text("Nenhum comprovante registrado.")
+        return
     c = comprovantes[-1]
-    return (
-        "📄 *Último Comprovante:*\n"
-        f"💰 Valor bruto: R$ {c['valor_bruto']:,.2f}\n"
-        f"💳 Tipo: {c['tipo']}\n"
-        f"⏰ Horário: {c['horario']}\n"
-        f"📉 Taxa aplicada: {c['taxa']}%\n"
-        f"✅ Valor líquido: R$ {c['valor_liquido']:,.2f}\n"
-        f"📌 Status: {'✅ Pago' if c['pago'] else '❌ Pendente'}"
+    tipo = f"{c['parcelas']}x" if c['parcelas'] else "PIX"
+    resposta = formatar_resposta(
+        c['valor_bruto'], c['parcelas'], c['horario'],
+        taxas_cartao.get(c['parcelas'], taxa_pix) if c['parcelas'] else taxa_pix,
+        c['valor_liquido']
     )
+    update.message.reply_text("📌 *Último comprovante:*\n\n" + resposta, parse_mode='Markdown')
+
+def ajuda(update: Update, context: CallbackContext):
+    texto = (
+        "*📖 Comandos disponíveis:*\n"
+        "1️⃣ Envie comprovante em PDF ou imagem\n"
+        "2️⃣ Ou envie valor manual (ex: `1490,00 pix`, `1899,99 10x`)\n"
+        "\n"
+        "✅ = marca último comprovante como pago\n"
+        "/listar_pendentes – Ver pendentes\n"
+        "/listar_pagos – Ver pagos\n"
+        "/total_que_devo – Total em aberto\n"
+        "/total_geral – Total geral\n"
+        "/último_comprovante – Ver último\n"
+        "/ajuda – Mostrar comandos"
+    )
+    update.message.reply_text(texto, parse_mode='Markdown')
