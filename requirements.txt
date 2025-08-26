@@ -1,4 +1,5 @@
 python-telegram-bot==20.8
 pillow
 pytesseract
-httpx~=0.26.0
+flask
+gunicorn
