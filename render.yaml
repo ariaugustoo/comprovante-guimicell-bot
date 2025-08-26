@@ -1,13 +1,11 @@
 services:
   - type: web
-    name: comprovantes-bot
-    runtime: python
+    name: bot-comprovante-dbh
+    env: python
+    region: oregon
+    plan: free
     buildCommand: ""
-    startCommand: python3 main.py
+    startCommand: "python3 main.py"
     envVars:
-      - key: BOT_TOKEN
-        sync: true
-      - key: GROUP_ID
-        sync: true
       - key: PORT
-        sync: true
+        value: 10000
