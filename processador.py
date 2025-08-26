@@ -1,95 +1,61 @@
 import re
 from datetime import datetime
 
-taxas_cartao = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59,
-    5: 7.19, 6: 8.29, 7: 9.19, 8: 9.99,
-    9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
-    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19,
-    17: 15.89, 18: 16.84
+GROUP_ID = -1002122662652
+TAXA_PIX = 0.002
+TAXAS_CARTAO = {
+    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719,
+    6: 0.0829, 7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088,
+    11: 0.1199, 12: 0.1252, 13: 0.1369, 14: 0.1419, 15: 0.1469,
+    16: 0.1519, 17: 0.1589, 18: 0.1684
 }
-TAXA_PIX = 0.2
 
-comprovantes = []
+def formatar_valor(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def formatar_mensagem(valor_bruto, parcelas, taxa, valor_liquido):
-    return (
-        f"📄 Comprovante analisado:\n"
-        f"💰 Valor bruto: R$ {valor_bruto:,.2f}\n"
-        f"💳 Parcelas: {parcelas}x\n"
-        f"📉 Taxa aplicada: {taxa:.2f}%\n"
-        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
-    )
-
-def processar_mensagem(bot, message):  # ✅ ESSA FUNÇÃO DEVE EXISTIR!
-    texto = message.caption if message.caption else message.text
+def processar_mensagem(bot, mensagem):
+    texto = mensagem.text.strip() if mensagem.text else ""
 
     if not texto:
-        return None
+        bot.send_message(mensagem.chat.id, "❌ Mensagem inválida.")
+        return
 
-    texto = texto.lower().replace(",", ".")
-    match_pix = re.match(r"([\d.]+)\s*pix", texto)
-    match_cartao = re.match(r"([\d.]+)\s*(\d{1,2})x", texto)
+    # 🔍 Identifica valor e tipo (PIX ou cartão com parcelas)
+    padrao_pix = re.match(r"([\d\.,]+)\s*pix", texto.lower())
+    padrao_cartao = re.match(r"([\d\.,]+)\s*(\d{1,2})x", texto.lower())
 
-    if match_pix:
-        valor = float(match_pix.group(1))
+    if padrao_pix:
+        valor_bruto = float(padrao_pix.group(1).replace(".", "").replace(",", "."))
         taxa = TAXA_PIX
-        valor_liquido = valor * (1 - taxa / 100)
-        comprovantes.append({"valor": valor, "parcelas": 1, "taxa": taxa, "liquido": valor_liquido, "pago": False})
-        return formatar_mensagem(valor, 1, taxa, valor_liquido)
-
-    elif match_cartao:
-        valor = float(match_cartao.group(1))
-        parcelas = int(match_cartao.group(2))
-        taxa = taxas_cartao.get(parcelas, 0)
-        valor_liquido = valor * (1 - taxa / 100)
-        comprovantes.append({"valor": valor, "parcelas": parcelas, "taxa": taxa, "liquido": valor_liquido, "pago": False})
-        return formatar_mensagem(valor, parcelas, taxa, valor_liquido)
-
-    elif texto == "total que devo":
-        total = sum(c["liquido"] for c in comprovantes if not c["pago"])
-        return f"💸 Total a pagar (pendente): R$ {total:,.2f}"
-
-    elif texto == "total geral":
-        total = sum(c["liquido"] for c in comprovantes)
-        return f"📊 Total geral (incluindo pagos): R$ {total:,.2f}"
-
-    elif texto == "listar pendentes":
-        pendentes = [c for c in comprovantes if not c["pago"]]
-        if not pendentes:
-            return "✅ Todos os comprovantes foram pagos."
-        return "\n\n".join([formatar_mensagem(c["valor"], c["parcelas"], c["taxa"], c["liquido"]) for c in pendentes])
-
-    elif texto == "listar pagos":
-        pagos = [c for c in comprovantes if c["pago"]]
-        if not pagos:
-            return "Nenhum comprovante foi marcado como pago ainda."
-        return "\n\n".join([formatar_mensagem(c["valor"], c["parcelas"], c["taxa"], c["liquido"]) for c in pagos])
-
-    elif texto == "último comprovante":
-        if not comprovantes:
-            return "Nenhum comprovante registrado ainda."
-        ultimo = comprovantes[-1]
-        return formatar_mensagem(ultimo["valor"], ultimo["parcelas"], ultimo["taxa"], ultimo["liquido"])
-
-    elif "✅" in texto:
-        if comprovantes:
-            comprovantes[-1]["pago"] = True
-            return "✅ Último comprovante marcado como pago."
-        else:
-            return "Nenhum comprovante encontrado para marcar como pago."
-
-    elif texto == "ajuda":
-        return (
-            "📌 Comandos disponíveis:\n"
-            "• `200,00 pix` → Aplica taxa de 0,2%\n"
-            "• `3644,90 10x` → Aplica taxa da tabela de cartão\n"
-            "• `✅` → Marca último comprovante como pago\n"
-            "• `total que devo` → Mostra total pendente\n"
-            "• `listar pendentes` → Lista comprovantes não pagos\n"
-            "• `listar pagos` → Lista comprovantes pagos\n"
-            "• `último comprovante` → Mostra último registro\n"
-            "• `total geral` → Soma tudo (pago + pendente)"
+        valor_liquido = valor_bruto * (1 - taxa)
+        mensagem_final = (
+            "📄 *Comprovante analisado:*\n"
+            f"💰 Valor bruto: {formatar_valor(valor_bruto)}\n"
+            f"🏦 Tipo: PIX\n"
+            f"📉 Taxa aplicada: {taxa * 100:.2f}%\n"
+            f"✅ Valor líquido a pagar: {formatar_valor(valor_liquido)}"
         )
+        bot.send_message(GROUP_ID, mensagem_final, parse_mode='Markdown')
+        return
 
-    return None
+    elif padrao_cartao:
+        valor_bruto = float(padrao_cartao.group(1).replace(".", "").replace(",", "."))
+        parcelas = int(padrao_cartao.group(2))
+        taxa = TAXAS_CARTAO.get(parcelas)
+
+        if taxa:
+            valor_liquido = valor_bruto * (1 - taxa)
+            mensagem_final = (
+                "📄 *Comprovante analisado:*\n"
+                f"💰 Valor bruto: {formatar_valor(valor_bruto)}\n"
+                f"💳 Parcelas: {parcelas}x\n"
+                f"📉 Taxa aplicada: {taxa * 100:.2f}%\n"
+                f"✅ Valor líquido a pagar: {formatar_valor(valor_liquido)}"
+            )
+            bot.send_message(GROUP_ID, mensagem_final, parse_mode='Markdown')
+        else:
+            bot.send_message(GROUP_ID, "❌ Quantidade de parcelas não suportada.")
+        return
+
+    # Se não identificar o tipo:
+    bot.send_message(GROUP_ID, "❌ Não consegui identificar o tipo de comprovante.\nEnvie no formato:\n\n*Exemplo PIX:* 6438,76 pix\n*Exemplo Cartão:* 7999,99 10x", parse_mode='Markdown')
