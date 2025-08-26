@@ -21,7 +21,7 @@ def formatar_mensagem(valor_bruto, parcelas, taxa, valor_liquido):
         f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
     )
 
-def processar_mensagem(bot, message):
+def processar_mensagem(bot, message):  # ✅ ESSA FUNÇÃO DEVE EXISTIR!
     texto = message.caption if message.caption else message.text
 
     if not texto:
