@@ -1,39 +1,88 @@
-import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
-from processador import (
-    processar_comprovante, listar_pendentes, listar_pagamentos, 
-    calcular_total_pendente, calcular_total_geral, ultimo_comprovante, ajuda
-)
+import re
+from datetime import datetime
 
-TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg80IA"
+TAXAS_CARTAO = {
+    1: 4.39,
+    2: 5.19,
+    3: 6.19,
+    4: 6.59,
+    5: 7.19,
+    6: 8.29,
+    7: 9.19,
+    8: 9.99,
+    9: 10.29,
+    10: 10.88,
+    11: 11.99,
+    12: 12.52,
+    13: 13.69,
+    14: 14.19,
+    15: 14.69,
+    16: 15.19,
+    17: 15.89,
+    18: 16.84,
+}
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+def normalizar_valor(valor_str):
+    valor_str = valor_str.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
+    try:
+        return float(valor_str)
+    except ValueError:
+        return None
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot do Guimicell ativo e pronto para uso!")
+def processar_comprovante(texto, tipo=None, parcelas=None):
+    valor_bruto = None
+    horario = None
+    valor_liquido = None
+    taxa = 0.0
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    padrao_valor = r'((?:\d{1,3}(?:\.\d{3})*|\d+)(?:,\d{2})?)'
+    padrao_horario = r'(\d{2}:\d{2})'
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("listar_pendentes", listar_pendentes))
-    app.add_handler(CommandHandler("listar_pagos", listar_pagamentos))
-    app.add_handler(CommandHandler("total_que_devo", calcular_total_pendente))
-    app.add_handler(CommandHandler("total_geral", calcular_total_geral))
-    app.add_handler(CommandHandler("ultimo_comprovante", ultimo_comprovante))  # <- AQUI corrigido sem acento
-    app.add_handler(CommandHandler("ajuda", ajuda))
-    app.add_handler(MessageHandler(filters.ALL, processar_comprovante))
+    valor_match = re.search(padrao_valor, texto)
+    if valor_match:
+        valor_bruto = normalizar_valor(valor_match.group(1))
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=10000,
-        url_path=TOKEN,
-        webhook_url="https://comprovante-guimicell-bot-vmvr.onrender.com/" + TOKEN
-    )
+    horario_match = re.search(padrao_horario, texto)
+    if horario_match:
+        horario = horario_match.group(1)
 
-if __name__ == "__main__":
-    main()
+    if tipo == "pix":
+        taxa = 0.2
+    elif tipo == "cartao" and parcelas in TAXAS_CARTAO:
+        taxa = TAXAS_CARTAO[parcelas]
+    else:
+        taxa = 0.0
+
+    if valor_bruto is not None:
+        valor_liquido = valor_bruto * (1 - taxa / 100)
+
+    return {
+        "valor_bruto": valor_bruto,
+        "horario": horario,
+        "parcelas": parcelas,
+        "taxa": taxa,
+        "valor_liquido": valor_liquido
+    }
+
+def calcular_valor_liquido(valor, tipo, parcelas=None):
+    taxa = 0.0
+    if tipo == "pix":
+        taxa = 0.2
+    elif tipo == "cartao" and parcelas in TAXAS_CARTAO:
+        taxa = TAXAS_CARTAO[parcelas]
+
+    valor_liquido = valor * (1 - taxa / 100)
+    return valor_liquido, taxa
+
+def formatar_comprovante(dados):
+    mensagem = "📄 *Comprovante analisado:*\n"
+    if dados["valor_bruto"] is not None:
+        mensagem += f"💰 *Valor bruto:* R$ {dados['valor_bruto']:,.2f}\n"
+    if dados["parcelas"] is not None:
+        mensagem += f"💳 *Parcelas:* {dados['parcelas']}x\n"
+    if dados["horario"] is not None:
+        mensagem += f"⏰ *Horário:* {dados['horario']}\n"
+    mensagem += f"📉 *Taxa aplicada:* {dados['taxa']}%\n"
+    if dados["valor_liquido"] is not None:
+        mensagem += f"✅ *Valor líquido a pagar:* R$ {dados['valor_liquido']:,.2f}\n"
+    return mensagem
