@@ -1,57 +1,69 @@
-import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
-from processador import processar_comprovante, marcar_como_pago, total_pendentes, listar_pendentes, listar_pagos, ajuda, ultimo_comprovante, total_geral
+import logging
+from flask import Flask, request
+from telegram import Bot, Update
+from processador import (
+    processar_comprovante,
+    marcar_como_pago,
+    total_pendentes,
+    listar_pendentes,
+    listar_pagos,
+    ajuda,
+    ultimo_comprovante,
+    total_geral
+)
 
 TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
 GROUP_ID = -1002626449000
-WEBHOOK_URL = "https://comprovante-guimicell-bot-vmvr.onrender.com"
 
-comprovantes = []
+bot = Bot(token=TOKEN)
+app = Flask(__name__)
 
-async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat_id != GROUP_ID:
-        return
+# Logs
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    resposta = await processar_comprovante(update, context, comprovantes)
-    if resposta:
-        await update.message.reply_text(resposta)
+@app.route("/")
+def home():
+    return "Bot está rodando com webhook!", 200
 
-async def comando_pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    resposta = marcar_como_pago(comprovantes)
-    await update.message.reply_text(resposta)
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        update = Update.de_json(request.get_json(force=True), bot)
+        message = update.effective_message
 
-async def comando_total(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(total_pendentes(comprovantes))
+        if message.chat.id != GROUP_ID:
+            return "Ignorado: outro grupo", 200
 
-async def comando_listar_pendentes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(listar_pendentes(comprovantes))
+        if message.text:
+            texto = message.text.strip().lower()
 
-async def comando_listar_pagos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(listar_pagos(comprovantes))
+            if texto.endswith("pix"):
+                processar_comprovante(bot, message, tipo="pix")
+            elif "x" in texto:
+                processar_comprovante(bot, message, tipo="cartao")
+            elif texto == "✅":
+                marcar_como_pago(bot, message)
+            elif texto == "total que devo":
+                total_pendentes(bot, message)
+            elif texto == "listar pendentes":
+                listar_pendentes(bot, message)
+            elif texto == "listar pagos":
+                listar_pagos(bot, message)
+            elif texto == "ajuda":
+                ajuda(bot, message)
+            elif texto == "último comprovante":
+                ultimo_comprovante(bot, message)
+            elif texto == "total geral":
+                total_geral(bot, message)
 
-async def comando_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(ajuda())
+        elif message.photo or message.document:
+            processar_comprovante(bot, message, tipo="imagem")
 
-async def comando_ultimo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(ultimo_comprovante(comprovantes))
+    except Exception as e:
+        logger.error(f"Erro no webhook: {e}")
 
-async def comando_total_geral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(total_geral(comprovantes))
+    return "ok", 200
 
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL | filters.TEXT, processar))
-app.add_handler(CommandHandler("pago", comando_pago))
-app.add_handler(CommandHandler("totalquedevo", comando_total))
-app.add_handler(CommandHandler("listarpendentes", comando_listar_pendentes))
-app.add_handler(CommandHandler("listarpagos", comando_listar_pagos))
-app.add_handler(CommandHandler("ajuda", comando_ajuda))
-app.add_handler(CommandHandler("ultimocomprovante", comando_ultimo))
-app.add_handler(CommandHandler("totalgeral", comando_total_geral))
-
-app.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.environ.get("PORT", 10000)),
-    webhook_url=f"{WEBHOOK_URL}/webhook"
-)
+if __name__ == "__main__":
+    app.run(debug=True)
