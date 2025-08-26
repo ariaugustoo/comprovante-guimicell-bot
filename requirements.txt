@@ -1,7 +1,5 @@
-python-telegram-bot==13.15
-flask
-opencv-python
+python-telegram-bot==20.8
+pillow
 pytesseract
-Pillow
-pyTelegramBotAPI
+opencv-python
 numpy
