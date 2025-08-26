@@ -1,4 +1,3 @@
 #!/bin/bash
-
-echo "Iniciando o bot no Render..."
-python3 main.py
+echo "Iniciando o bot com webhook..."
+gunicorn main:app --bind 0.0.0.0:$PORT --timeout 0
