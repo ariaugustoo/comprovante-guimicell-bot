@@ -1,150 +1,118 @@
-import pytesseract
-from PIL import Image
-import re
-import io
-from telegram import Update
-from telegram.ext import ContextTypes
-import datetime
+import os
+import telebot
+import time
+import json
+from flask import Flask, request
+from processador import processar_comprovante
+
+TOKEN = os.getenv("BOT_TOKEN", "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA")
+GROUP_ID = int(os.getenv("GROUP_ID", "-1002626449000"))
+
+bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 comprovantes = []
 
-taxas_cartao = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
-    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
-    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
-}
+@bot.message_handler(commands=["start", "ajuda"])
+def send_help(message):
+    comandos = """
+📋 *Comandos disponíveis:*
 
-def extrair_texto(update: Update):
-    if update.message.photo:
-        file = update.message.effective_attachment[-1]
+1️⃣ `valor pix` → Ex: `6438,76 pix`
+2️⃣ `valor cartão` → Ex: `7899,99 10x`
+3️⃣ `✅` → Marca como pago o último comprovante
+4️⃣ `total que devo` → Total pendente
+5️⃣ `listar pendentes` → Lista todos em aberto
+6️⃣ `listar pagos` → Lista pagos
+7️⃣ `último comprovante` → Mostra o último enviado
+8️⃣ `total geral` → Tudo (pago + pendente)
+"""
+    bot.reply_to(message, comandos, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: True)
+def processar_mensagem(message):
+    global comprovantes
+
+    texto = message.text.strip()
+    chat_id = message.chat.id
+
+    if chat_id != GROUP_ID:
+        return
+
+    if texto.startswith("✅"):
+        for comp in reversed(comprovantes):
+            if not comp.get("pago"):
+                comp["pago"] = True
+                bot.reply_to(message, f"✅ Comprovante de R$ {comp['valor_bruto']} marcado como *pago*.", parse_mode="Markdown")
+                return
+        bot.reply_to(message, "Nenhum comprovante pendente encontrado.")
+
+    elif texto.lower() == "total que devo":
+        total = sum(c["valor_liquido"] for c in comprovantes if not c.get("pago"))
+        bot.reply_to(message, f"💰 Total pendente: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
+    elif texto.lower() == "listar pendentes":
+        pendentes = [c for c in comprovantes if not c.get("pago")]
+        if not pendentes:
+            bot.reply_to(message, "✅ Nenhum comprovante pendente.")
+            return
+        resposta = "\n".join([f"💳 {c['parcelas']}x - R$ {c['valor_bruto']} → 💰 R$ {c['valor_liquido']}" for c in pendentes])
+        bot.reply_to(message, "📌 Pendentes:\n" + resposta)
+
+    elif texto.lower() == "listar pagos":
+        pagos = [c for c in comprovantes if c.get("pago")]
+        if not pagos:
+            bot.reply_to(message, "📭 Nenhum comprovante pago.")
+            return
+        resposta = "\n".join([f"✅ {c['parcelas']}x - R$ {c['valor_bruto']} → R$ {c['valor_liquido']}" for c in pagos])
+        bot.reply_to(message, "📬 Pagos:\n" + resposta)
+
+    elif texto.lower() == "último comprovante":
+        if not comprovantes:
+            bot.reply_to(message, "Nenhum comprovante registrado.")
+            return
+        c = comprovantes[-1]
+        status = "✅ PAGO" if c.get("pago") else "❌ PENDENTE"
+        bot.reply_to(message, f"""
+📄 Último comprovante:
+💰 Valor bruto: R$ {c['valor_bruto']}
+💳 Parcelas: {c['parcelas']}
+📉 Taxa aplicada: {c['taxa']}%
+✅ Valor líquido: R$ {c['valor_liquido']}
+📌 Status: {status}
+""")
+
+    elif texto.lower() == "total geral":
+        total = sum(c["valor_liquido"] for c in comprovantes)
+        bot.reply_to(message, f"📊 Total geral (pago + pendente): R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
     else:
-        file = update.message.document
-    file_path = file.get_file()
-    file_bytes = io.BytesIO()
-    file_path.download(out=file_bytes)
-    file_bytes.seek(0)
-    image = Image.open(file_bytes)
-    texto = pytesseract.image_to_string(image, lang='por')
-    return texto
+        resultado = processar_comprovante(texto)
+        if resultado:
+            comprovantes.append(resultado)
+            bot.reply_to(message, f"""
+📄 Comprovante analisado:
+💰 Valor bruto: R$ {resultado['valor_bruto']}
+💳 Parcelas: {resultado['parcelas']}
+📉 Taxa aplicada: {resultado['taxa']}%
+✅ Valor líquido a pagar: R$ {resultado['valor_liquido']}
+""")
+        else:
+            bot.reply_to(message, "❌ Não consegui entender o comprovante. Envie no formato:\n\n`6438,76 pix` ou `7899,99 10x`")
 
-def parse_valor_e_parcelas(texto):
-    texto = texto.lower().replace(',', '.').replace('x', 'x ')
-    valor = None
-    parcelas = 1
-    tipo = 'PIX'
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    json_str = request.get_data().decode("UTF-8")
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return "OK", 200
 
-    # Valor + Pix
-    match_pix = re.search(r'(\d+[.,]?\d*)\s*pix', texto)
-    if match_pix:
-        valor = float(match_pix.group(1))
-        tipo = 'PIX'
-        parcelas = 1
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot ativo!", 200
 
-    # Valor + Parcelas (ex: 1234,56 10x)
-    match_cartao = re.search(r'(\d+[.,]?\d*)\s*(\d{1,2})\s*x', texto)
-    if match_cartao:
-        valor = float(match_cartao.group(1))
-        parcelas = int(match_cartao.group(2))
-        tipo = 'CRÉDITO'
-
-    return valor, parcelas, tipo
-
-async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message.text
-
-    # ✅ Marcar como pago
-    if msg and '✅' in msg:
-        if comprovantes:
-            comprovantes[-1]['pago'] = True
-            await update.message.reply_text("✅ Comprovante marcado como pago!")
-        return
-
-    # Texto normal: tentar extrair valor e tipo
-    valor, parcelas, tipo = parse_valor_e_parcelas(msg or '')
-
-    # Se não reconheceu valor, tentar OCR
-    if not valor and (update.message.photo or update.message.document):
-        texto = extrair_texto(update)
-        valor, parcelas, tipo = parse_valor_e_parcelas(texto)
-
-    if not valor:
-        await update.message.reply_text("❌ Não consegui identificar o valor. Envie no formato:\nEx: `6438,76 pix` ou `7899,99 10x`")
-        return
-
-    # Calcular taxa
-    taxa_aplicada = 0.2 if tipo == 'PIX' else taxas_cartao.get(parcelas, 0)
-    valor_liquido = round(valor * (1 - taxa_aplicada / 100), 2)
-    horario = datetime.datetime.now().strftime("%H:%M")
-
-    comprovante = {
-        'valor': valor,
-        'parcelas': parcelas,
-        'horario': horario,
-        'taxa': taxa_aplicada,
-        'valor_liquido': valor_liquido,
-        'pago': False
-    }
-    comprovantes.append(comprovante)
-
-    resposta = (
-        "📄 *Comprovante analisado:*\n"
-        f"💰 Valor bruto: R$ {valor:,.2f}\n"
-        f"💳 Parcelas: {parcelas}x\n"
-        f"⏰ Horário: {horario}\n"
-        f"📉 Taxa aplicada: {taxa_aplicada}%\n"
-        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
-    )
-    await update.message.reply_text(resposta, parse_mode='Markdown')
-
-async def listar_pendentes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = "*📋 Comprovantes Pendentes:*\n\n"
-    for c in comprovantes:
-        if not c['pago']:
-            texto += f"• R$ {c['valor_liquido']:,.2f} | {c['parcelas']}x | {c['horario']}\n"
-    await update.message.reply_text(texto or "Nenhum comprovante pendente.", parse_mode='Markdown')
-
-async def listar_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = "*✅ Comprovantes Pagos:*\n\n"
-    for c in comprovantes:
-        if c['pago']:
-            texto += f"• R$ {c['valor_liquido']:,.2f} | {c['parcelas']}x | {c['horario']}\n"
-    await update.message.reply_text(texto or "Nenhum comprovante pago ainda.", parse_mode='Markdown')
-
-async def total_pendente(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = sum(c['valor_liquido'] for c in comprovantes if not c['pago'])
-    await update.message.reply_text(f"💸 *Total que você deve pagar ao lojista:* R$ {total:,.2f}", parse_mode='Markdown')
-
-async def total_geral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = sum(c['valor_liquido'] for c in comprovantes)
-    await update.message.reply_text(f"📊 *Total de todos os comprovantes (pagos e pendentes):* R$ {total:,.2f}", parse_mode='Markdown')
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = (
-        "*📌 Comandos disponíveis:*\n\n"
-        "• Enviar comprovante: `6438,76 pix` ou `7899,99 10x`\n"
-        "• ✅ = marcar último como pago\n"
-        "• /listarpendentes = listar não pagos\n"
-        "• /listarpagos = listar pagos\n"
-        "• /totalquedevo = soma dos pendentes\n"
-        "• /totalgeral = soma geral\n"
-        "• /ultimo = mostrar o último comprovante\n"
-        "• /ajuda = mostrar essa lista"
-    )
-    await update.message.reply_text(texto, parse_mode='Markdown')
-
-async def ultimo_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not comprovantes:
-        await update.message.reply_text("Nenhum comprovante enviado ainda.")
-        return
-    c = comprovantes[-1]
-    status = "✅ Pago" if c['pago'] else "🕓 Pendente"
-    texto = (
-        "📄 *Último Comprovante:*\n"
-        f"💰 Valor: R$ {c['valor']:,.2f}\n"
-        f"💳 Parcelas: {c['parcelas']}x\n"
-        f"⏰ Horário: {c['horario']}\n"
-        f"📉 Taxa: {c['taxa']}%\n"
-        f"💵 Líquido: R$ {c['valor_liquido']:,.2f}\n"
-        f"{status}"
-    )
-    await update.message.reply_text(texto, parse_mode='Markdown')
+if __name__ == "__main__":
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.set_webhook(url=f"https://comprovante-guimicell-bot.onrender.com/{TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
