@@ -6,9 +6,4 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 main.py"
     envVars:
-      - key: TOKEN
-        value: seu_token_aqui
-      - key: GROUP_ID
-        value: -1003089523643
-      - key: ADMIN_ID
-        value: 123456789
+      - fromDotEnv: true
