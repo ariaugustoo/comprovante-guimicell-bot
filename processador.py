@@ -1,123 +1,123 @@
+from telegram.ext import MessageHandler, Filters, CommandHandler
+from telegram import ParseMode
 import re
 from datetime import datetime
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
-
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-# Tabela de taxas de cartão por número de parcelas
-TAXAS_CARTAO = {
-    1: 4.39,
-    2: 5.19,
-    3: 6.19,
-    4: 6.59,
-    5: 7.19,
-    6: 8.29,
-    7: 9.19,
-    8: 9.99,
-    9: 10.29,
-    10: 10.88,
-    11: 11.99,
-    12: 12.52,
-    13: 13.69,
-    14: 14.19,
-    15: 14.69,
-    16: 15.19,
-    17: 15.89,
-    18: 16.84,
-}
-
-# Lista de comprovantes analisados
 comprovantes = []
 
+taxas_cartao = {
+    i: t for i, t in zip(range(1, 19), [
+        4.39, 5.19, 6.19, 6.59, 7.19, 8.29, 9.19, 9.99, 10.29,
+        10.88, 11.99, 12.52, 13.69, 14.19, 14.69, 15.19, 15.89, 16.84
+    ])
+}
+
 def normalizar_valor(valor_str):
-    valor_str = valor_str.strip().replace("R$", "").replace(" ", "")
-    valor_str = valor_str.replace(".", "").replace(",", ".")
-    return float(valor_str)
+    valor_str = valor_str.replace('R$', '').replace(' ', '').replace('.', '').replace(',', '.')
+    try:
+        return float(valor_str)
+    except:
+        return None
 
-def calcular_valor_liquido(valor_bruto, parcelas):
-    if parcelas == 0:
-        taxa = 0.2
+def calcular_valor_liquido(valor, parcelas=None):
+    if parcelas:
+        taxa = taxas_cartao.get(parcelas, 0)
     else:
-        taxa = TAXAS_CARTAO.get(parcelas, 0)
+        taxa = 0.2
+    valor_liquido = round(valor * (1 - taxa / 100), 2)
+    return taxa, valor_liquido
 
-    valor_liquido = valor_bruto * (1 - taxa / 100)
-    return round(valor_liquido, 2), taxa
+def extrair_horario():
+    agora = datetime.now().strftime('%H:%M')
+    return agora
 
-def extrair_valor_e_parcelas(texto):
-    texto = texto.lower().replace("x", " x")
-    match = re.match(r'([\d.,]+)\s*(\d{1,2})\s*x', texto)
-    if match:
-        valor = normalizar_valor(match.group(1))
-        parcelas = int(match.group(2))
-        return valor, parcelas
-
-    if 'pix' in texto:
-        match = re.match(r'([\d.,]+)', texto)
-        if match:
-            valor = normalizar_valor(match.group(1))
-            return valor, 0
-
-    return None, None
-
-def processar_mensagem(mensagem, bot, chat_id, user_id):
-    mensagem = mensagem.strip().lower()
-
-    if mensagem == "ajuda":
-        bot.send_message(chat_id=chat_id, text="❗ Envie um valor seguido de 'pix' ou número de parcelas, ex:\n`1438,90 pix`\n`7432,90 12x`", parse_mode='Markdown')
-        return
-
-    if mensagem == "listar pagos":
-        pagos = [c for c in comprovantes if c["pago"]]
-        if not pagos:
-            bot.send_message(chat_id=chat_id, text="✅ Nenhum comprovante marcado como pago.")
-        else:
-            resposta = "\n\n".join([f"💸 {c['valor_bruto']:,.2f} → R$ {c['valor_liquido']:,.2f}" for c in pagos])
-            bot.send_message(chat_id=chat_id, text=f"✅ Comprovantes pagos:\n{resposta}")
-        return
-
-    if mensagem == "total que devo":
-        pendentes = [c for c in comprovantes if not c["pago"]]
-        total = sum(c["valor_liquido"] for c in pendentes)
-        bot.send_message(chat_id=chat_id, text=f"💰 Total em aberto: R$ {total:,.2f}")
-        return
-
-    if mensagem.endswith("✅"):
-        if comprovantes:
-            comprovantes[-1]["pago"] = True
-            bot.send_message(chat_id=chat_id, text="✅ Comprovante marcado como pago!")
-        return
-
-    valor, parcelas = extrair_valor_e_parcelas(mensagem)
-
-    if valor is None:
-        bot.send_message(chat_id=chat_id, text="❗ Envie um valor seguido de 'pix' ou número de parcelas, ex:\n`1438,90 pix`\n`7432,90 12x`", parse_mode='Markdown')
-        return
-
-    horario = datetime.now().strftime("%H:%M")
-    valor_liquido, taxa = calcular_valor_liquido(valor, parcelas)
-
-    comprovante = {
-        "valor_bruto": valor,
-        "parcelas": parcelas,
-        "horario": horario,
-        "taxa": taxa,
-        "valor_liquido": valor_liquido,
-        "pago": False
-    }
-
-    comprovantes.append(comprovante)
-
-    parcelas_texto = f"{parcelas}" if parcelas > 0 else "-"
-    resposta = (
+def formatar_mensagem(valor, parcelas=None):
+    taxa, liquido = calcular_valor_liquido(valor, parcelas)
+    horario = extrair_horario()
+    return (
         "📄 *Comprovante analisado:*\n"
         f"💰 Valor bruto: R$ {valor:,.2f}\n"
-        f"📄 Parcelas: {parcelas_texto}\n"
+        f"{f'💳 Parcelas: {parcelas}x\n' if parcelas else ''}"
         f"⏰ Horário: {horario}\n"
-        f"📉 Taxa aplicada: {taxa}%\n"
-        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
+        f"📉 Taxa aplicada: {taxa:.2f}%\n"
+        f"✅ Valor líquido a pagar: R$ {liquido:,.2f}"
     )
 
-    bot.send_message(chat_id=chat_id, text=resposta, parse_mode="Markdown")
+def processar_mensagem(update, context, group_id, admin_id):
+    mensagem = update.message.text.lower()
+    user_id = update.message.from_user.id
+
+    match_pix = re.match(r'([\d.,]+)\s*pix', mensagem)
+    match_cartao = re.match(r'([\d.,]+)\s*(\d{1,2})x', mensagem)
+
+    if match_pix:
+        valor = normalizar_valor(match_pix.group(1))
+        if valor:
+            comprovantes.append({'valor': valor, 'parcelas': None, 'pago': False})
+            update.message.reply_text(formatar_mensagem(valor), parse_mode=ParseMode.MARKDOWN)
+
+    elif match_cartao:
+        valor = normalizar_valor(match_cartao.group(1))
+        parcelas = int(match_cartao.group(2))
+        if valor and parcelas:
+            comprovantes.append({'valor': valor, 'parcelas': parcelas, 'pago': False})
+            update.message.reply_text(formatar_mensagem(valor, parcelas), parse_mode=ParseMode.MARKDOWN)
+
+    elif mensagem.strip() == "✅":
+        for comprovante in reversed(comprovantes):
+            if not comprovante["pago"]:
+                comprovante["pago"] = True
+                update.message.reply_text("✅ Último comprovante marcado como *pago*.", parse_mode=ParseMode.MARKDOWN)
+                break
+
+    elif "total que devo" in mensagem:
+        total = sum(c['valor'] if c['parcelas'] is None else calcular_valor_liquido(c['valor'], c['parcelas'])[1]
+                    for c in comprovantes if not c['pago'])
+        update.message.reply_text(f"💰 *Total pendente:* R$ {total:,.2f}", parse_mode=ParseMode.MARKDOWN)
+
+    elif "listar pendentes" in mensagem:
+        pendentes = [c for c in comprovantes if not c["pago"]]
+        if not pendentes:
+            update.message.reply_text("✅ Nenhum comprovante pendente.")
+        else:
+            resposta = "📋 *Pendentes:*\n"
+            for i, c in enumerate(pendentes, 1):
+                taxa, liquido = calcular_valor_liquido(c['valor'], c['parcelas'])
+                resposta += (
+                    f"\n{i}. R$ {c['valor']:,.2f} - "
+                    f"{f'{c['parcelas']}x - ' if c['parcelas'] else ''}"
+                    f"Taxa: {taxa:.2f}% - Líquido: R$ {liquido:,.2f}"
+                )
+            update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+
+    elif "listar pagos" in mensagem:
+        pagos = [c for c in comprovantes if c["pago"]]
+        if not pagos:
+            update.message.reply_text("📭 Nenhum comprovante marcado como pago.")
+        else:
+            resposta = "📬 *Pagos:*\n"
+            for i, c in enumerate(pagos, 1):
+                taxa, liquido = calcular_valor_liquido(c['valor'], c['parcelas'])
+                resposta += (
+                    f"\n{i}. R$ {c['valor']:,.2f} - "
+                    f"{f'{c['parcelas']}x - ' if c['parcelas'] else ''}"
+                    f"Taxa: {taxa:.2f}% - Líquido: R$ {liquido:,.2f}"
+                )
+            update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+
+    elif "ajuda" in mensagem:
+        comandos = (
+            "📌 *Comandos disponíveis:*\n"
+            "- `1234,56 pix`: calcula com taxa PIX (0.2%)\n"
+            "- `1234,56 6x`: calcula com taxa cartão (por parcela)\n"
+            "- `✅`: marcar último como pago\n"
+            "- `total que devo`: mostra total pendente\n"
+            "- `listar pendentes`: mostra todos não pagos\n"
+            "- `listar pagos`: mostra os pagos\n"
+            "- `ajuda`: mostra esta lista"
+        )
+        update.message.reply_text(comandos, parse_mode=ParseMode.MARKDOWN)
+
+def registrar_handlers(dispatcher, group_id, admin_id):
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command,
+                                          lambda u, c: processar_mensagem(u, c, group_id, admin_id)))
