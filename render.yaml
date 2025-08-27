@@ -2,13 +2,13 @@ services:
   - type: web
     name: comprovante-guimicell-bot
     env: python
-    plan: free
+    region: oregon
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 main.py"
     envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
+      - key: TOKEN
+        value: seu_token_aqui
       - key: GROUP_ID
-        sync: false
+        value: -1003089523643
       - key: ADMIN_ID
-        sync: false
+        value: 123456789
