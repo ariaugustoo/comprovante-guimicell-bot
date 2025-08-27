@@ -27,7 +27,6 @@ def extrair_info_comprovante(texto):
 
     if 'pix' in texto:
         tipo = 'pix'
-        parcelas = 1
     else:
         parcelas_match = re.search(r'(\d{1,2})x', texto)
         if parcelas_match:
@@ -110,3 +109,29 @@ def comandos_suporte():
         "7️⃣ `ultimo comprovante` - Mostra o ultimo enviado\n"
         "8️⃣ `total geral` - Total de tudo\n"
     )
+
+def processar_mensagem(texto):
+    texto = normalizar_texto(texto)
+
+    if 'total que devo' in texto:
+        return total_que_devo()
+    elif 'listar pendentes' in texto:
+        return listar_pendentes()
+    elif 'listar pagos' in texto:
+        return listar_pagos()
+    elif 'ultimo comprovante' in texto:
+        return ultimo_comprovante()
+    elif 'total geral' in texto:
+        return total_geral()
+    elif 'ajuda' in texto or 'comandos' in texto:
+        return comandos_suporte()
+    elif texto == '✅':
+        return marcar_como_pago()
+    else:
+        comprovante = extrair_info_comprovante(texto)
+        if comprovante:
+            calcular_valor_liquido(comprovante)
+            comprovantes.append(comprovante)
+            return formatar_comprovante(comprovante)
+
+    return None
