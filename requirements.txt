@@ -1,3 +1,4 @@
 python-telegram-bot==13.15
-flask
-python-dotenv
+Flask==2.1.3
+APScheduler==3.6.3
+python-dotenv==1.0.0
