@@ -1,50 +1,40 @@
 import os
 from flask import Flask, request
-import telegram
-from processador import processar_pagamento, calcular_total_liquido, calcular_total_bruto
+from processador import processar_mensagem, comando_total_liquido, comando_total_bruto, marcar_como_pago
+from dotenv import load_dotenv
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+load_dotenv()
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
-
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
-    return 'Bot rodando com webhook!'
+    return "Bot está rodando com sucesso!"
 
-@app.route('/webhook', methods=['POST'])
+@app.route(f"/webhook", methods=["POST"])
 def webhook():
-    if request.method == "POST":
-        update = telegram.Update.de_json(request.get_json(force=True), bot)
-        chat_id = update.message.chat.id
-        user_id = update.message.from_user.id
-        mensagem = update.message.text.strip().lower()
+    data = request.get_json()
 
-        if not mensagem:
-            return 'ok'
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        user_id = data["message"]["from"]["id"]
+        message_text = data["message"].get("text", "").strip()
 
-        if mensagem.endswith("pix") or "x" in mensagem:
-            resposta = processar_pagamento(mensagem)
-            bot.send_message(chat_id=chat_id, text=resposta)
-        
-        elif mensagem == "pagamento feito":
-            resposta = "✅ Comprovante marcado como pago!"
-            bot.send_message(chat_id=chat_id, text=resposta)
+        if message_text:
+            if message_text.lower() == "pagamento feito":
+                return marcar_como_pago(chat_id)
+            elif message_text.lower() == "total líquido":
+                return comando_total_liquido(chat_id)
+            elif message_text.lower() == "total a pagar":
+                return comando_total_bruto(chat_id)
+            else:
+                return processar_mensagem(chat_id, message_text)
 
-        elif mensagem == "total liquido":
-            resposta = calcular_total_liquido()
-            bot.send_message(chat_id=chat_id, text=resposta)
+    return "OK", 200
 
-        elif mensagem == "total a pagar":
-            resposta = calcular_total_bruto()
-            bot.send_message(chat_id=chat_id, text=resposta)
-
-        else:
-            bot.send_message(chat_id=chat_id, text="❓ Comando não reconhecido. Use: '7500 pix', '7990 10x', 'total liquido' ou 'total a pagar'.")
-
-    return 'ok'
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
