@@ -1,16 +1,14 @@
+import os
 import re
+import pytesseract
+from PIL import Image
 from datetime import datetime
 from telegram import Update
 from telegram.ext import CallbackContext
-import pytesseract
-from PIL import Image
-import os
-import requests
 from io import BytesIO
 
-# Armazenamento simples na memória
-comprovantes = []
-ADMIN_ID = 123456789  # <-- troque pelo seu Telegram user ID
+# ADMIN
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # Tabela de taxas
 taxas_cartao = {
@@ -19,6 +17,9 @@ taxas_cartao = {
     13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
 }
 
+# Lista em memória
+comprovantes = []
+
 def processar_mensagem(update: Update, context: CallbackContext):
     msg = update.message
     if msg.document or msg.photo:
@@ -26,19 +27,18 @@ def processar_mensagem(update: Update, context: CallbackContext):
         file = arquivo.get_file()
         imagem = Image.open(BytesIO(file.download_as_bytearray()))
         texto_extraido = pytesseract.image_to_string(imagem)
+
         match_valor = re.search(r'([\d\.,]+)', texto_extraido)
         match_hora = re.search(r'(\d{2}:\d{2})', texto_extraido)
-
         if match_valor:
             valor_str = match_valor.group(1).replace('.', '').replace(',', '.')
             valor = float(valor_str)
             hora = match_hora.group(1) if match_hora else datetime.now().strftime("%H:%M")
             registrar_comprovante(update, tipo="imagem", valor=valor, hora=hora)
         else:
-            msg.reply_text("❌ Não consegui ler o valor. Por favor, envie manualmente (ex: `1432,50 pix` ou `7899,99 10x`).")
+            msg.reply_text("❌ Não consegui ler o valor. Envie manualmente (ex: `1432,50 pix` ou `7899,99 10x`).")
     elif msg.text:
         texto = msg.text.lower().strip()
-
         if "pix" in texto:
             valor = extrair_valor(texto)
             if valor:
@@ -51,17 +51,14 @@ def processar_mensagem(update: Update, context: CallbackContext):
 
 def registrar_comprovante(update, tipo, valor, hora=None, parcelas=None):
     hora = hora or datetime.now().strftime("%H:%M")
-
     if tipo == "pix":
         taxa = 0.2
-        valor_liquido = round(valor * (1 - taxa / 100), 2)
     elif tipo == "cartao" and parcelas in taxas_cartao:
         taxa = taxas_cartao[parcelas]
-        valor_liquido = round(valor * (1 - taxa / 100), 2)
     else:
         update.message.reply_text("❌ Erro ao calcular taxa.")
         return
-
+    valor_liquido = round(valor * (1 - taxa / 100), 2)
     comprovante = {
         "id": len(comprovantes) + 1,
         "valor": valor,
@@ -72,9 +69,7 @@ def registrar_comprovante(update, tipo, valor, hora=None, parcelas=None):
         "valor_liquido": valor_liquido,
         "pago": False
     }
-
     comprovantes.append(comprovante)
-
     texto = (
         f"📄 *Comprovante analisado:*\n"
         f"💰 Valor bruto: R$ {valor:,.2f}\n"
@@ -151,8 +146,7 @@ def total_que_devo(update: Update = None, context: CallbackContext = None, resum
 
 def total_geral(update: Update, context: CallbackContext):
     total = sum(c["valor_liquido"] for c in comprovantes)
-    resposta = f"📊 Total geral dos comprovantes: R$ {total:,.2f}"
-    update.message.reply_text(resposta)
+    update.message.reply_text(f"📊 Total geral dos comprovantes: R$ {total:,.2f}")
 
 def ultimo_comprovante(update: Update, context: CallbackContext):
     if comprovantes:
