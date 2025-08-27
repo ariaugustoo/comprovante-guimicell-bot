@@ -4,13 +4,12 @@ services:
     env: python
     region: oregon
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python3 main.py
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python3 main.py"
     envVars:
       - key: TELEGRAM_TOKEN
-        fromEnvVar: TELEGRAM_TOKEN
+        sync: false
       - key: GROUP_ID
-        fromEnvVar: GROUP_ID
+        sync: false
       - key: ADMIN_ID
-        fromEnvVar: ADMIN_ID
-    healthCheckPath: /
+        sync: false
