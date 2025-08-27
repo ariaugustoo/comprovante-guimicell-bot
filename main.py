@@ -34,7 +34,7 @@ def webhook():
             resposta = "✅ Comprovante marcado como pago!"
             bot.send_message(chat_id=chat_id, text=resposta)
 
-        elif mensagem == "total líquido":
+        elif mensagem == "total liquido":
             resposta = calcular_total_liquido()
             bot.send_message(chat_id=chat_id, text=resposta)
 
@@ -43,6 +43,6 @@ def webhook():
             bot.send_message(chat_id=chat_id, text=resposta)
 
         else:
-            bot.send_message(chat_id=chat_id, text="❓ Comando não reconhecido. Use: 'PIX', '1x', ... ou 'total líquido'.")
+            bot.send_message(chat_id=chat_id, text="❓ Comando não reconhecido. Use: '7500 pix', '7990 10x', 'total liquido' ou 'total a pagar'.")
 
     return 'ok'
