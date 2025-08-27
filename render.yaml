@@ -2,8 +2,14 @@ services:
   - type: web
     name: comprovante-guimicell-bot
     env: python
-    region: oregon
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python3 main.py"
+    plan: free
+    buildCommand: ""
+    startCommand: python3 main.py
     envVars:
-      - fromDotEnv: true
+      - key: BOT_TOKEN
+        value: 8293056690:AAEYab0kMkXvnCR8A3Su4bn4j3uV6WMmcrk
+      - key: GROUP_ID
+        value: "-1003089523643"
+      - key: ADMIN_ID
+        value: "5857469519"
+    autoDeploy: true
