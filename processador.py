@@ -1,65 +1,70 @@
+from telegram.ext import CommandHandler, MessageHandler, Filters
+from telegram import ParseMode
 import re
-from datetime import datetime
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
-
-GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-comprovantes = []
-resumo_enviado = False
-
-taxas_cartao = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
-    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
-    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
-}
-
-def calcular_liquido(valor, parcelas=None):
-    if parcelas:
-        taxa = taxas_cartao.get(parcelas, 0)
-    else:
-        taxa = 0.2  # PIX
-    liquido = valor * (1 - taxa / 100)
-    return round(liquido, 2), taxa
-
-def adicionar_comprovante(valor, parcelas, horario, tipo, pago=False):
-    liquido, taxa = calcular_liquido(valor, parcelas)
-    comprovante = {
-        "valor": valor,
-        "parcelas": parcelas,
-        "horario": horario,
-        "tipo": tipo,
-        "taxa": taxa,
-        "liquido": liquido,
-        "pago": pago,
-        "timestamp": datetime.now()
+def calcular_valor_liquido(valor, tipo_pagamento, parcelas=1):
+    # Tabela de taxas de crédito por número de parcelas
+    taxas_cartao = {
+        1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
+        7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
+        13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
     }
-    comprovantes.append(comprovante)
-    return comprovante
 
-def marcar_comprovante_como_pago():
-    for c in reversed(comprovantes):
-        if not c["pago"]:
-            c["pago"] = True
-            return c
-    return None
+    if tipo_pagamento == "pix":
+        taxa = 0.2
+    elif tipo_pagamento == "cartao" and parcelas in taxas_cartao:
+        taxa = taxas_cartao[parcelas]
+    else:
+        taxa = 0
 
-def gerar_resumo():
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    pagos = [c for c in comprovantes if c["pago"]]
-    total_pendentes = sum(c["liquido"] for c in pendentes)
-    total_pagos = sum(c["liquido"] for c in pagos)
-    total_geral = total_pendentes + total_pagos
-    return pendentes, pagos, total_pendentes, total_pagos, total_geral
+    valor_liquido = valor * (1 - taxa / 100)
+    return round(valor_liquido, 2), taxa
 
-def limpar_tudo():
-    comprovantes.clear()
+def responder_comprovante(update, context):
+    texto = update.message.text.lower()
+    chat_id = update.message.chat_id
 
-def ultimo_comprovante():
-    return comprovantes[-1] if comprovantes else None
+    # PIX
+    if "pix" in texto:
+        match = re.search(r"([\d.,]+)", texto)
+        if match:
+            valor = float(match.group(1).replace('.', '').replace(',', '.'))
+            liquido, taxa = calcular_valor_liquido(valor, "pix")
+            msg = (
+                f"📄 *Comprovante analisado:*\n"
+                f"💰 Valor bruto: R$ {valor:,.2f}\n"
+                f"💳 Tipo: PIX\n"
+                f"📉 Taxa aplicada: {taxa}%\n"
+                f"✅ Valor líquido a pagar: R$ {liquido:,.2f}"
+            )
+            context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
-def listar_comprovantes(pago):
-    return [c for c in comprovantes if c["pago"] == pago]
+    # CARTÃO com parcelas
+    elif "x" in texto:
+        match = re.search(r"([\d.,]+)[^\d]*(\d{1,2})x", texto)
+        if match:
+            valor = float(match.group(1).replace('.', '').replace(',', '.'))
+            parcelas = int(match.group(2))
+            liquido, taxa = calcular_valor_liquido(valor, "cartao", parcelas)
+            msg = (
+                f"📄 *Comprovante analisado:*\n"
+                f"💰 Valor bruto: R$ {valor:,.2f}\n"
+                f"💳 Parcelas: {parcelas}x\n"
+                f"📉 Taxa aplicada: {taxa}%\n"
+                f"✅ Valor líquido a pagar: R$ {liquido:,.2f}"
+            )
+            context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN)
+
+def comando_ajuda(update, context):
+    msg = (
+        "📌 *Comandos disponíveis:*\n"
+        "• Envie `6.500,00 pix` para calcular valor líquido com taxa de 0.2%\n"
+        "• Envie `8.000,00 12x` para calcular com taxa de cartão (12x = 12.52%)\n"
+        "• Envie ✅ após pagar para marcar como pago\n"
+        "• Envie `total que devo` para ver o total de comprovantes pendentes"
+    )
+    update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+def registrar_handlers(dispatcher, GROUP_ID, ADMIN_ID):
+    dispatcher.add_handler(CommandHandler("ajuda", comando_ajuda))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder_comprovante))
