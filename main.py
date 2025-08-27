@@ -46,3 +46,5 @@ def webhook():
             bot.send_message(chat_id=chat_id, text="❓ Comando não reconhecido. Use: '7500 pix', '7990 10x', 'total liquido' ou 'total a pagar'.")
 
     return 'ok'
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
