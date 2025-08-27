@@ -1,178 +1,220 @@
 from flask import Flask, request
 import telegram
 from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
-from processador import processar_comprovante, gerar_resumo_pendentes, gerar_resumo_geral, listar_comprovantes, limpar_todos_os_comprovantes, corrigir_ultimo_valor
-from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 import os
-import threading
+import re
+from datetime import datetime
+import pytz
 
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = telegram.Bot(token=TOKEN)
 app = Flask(__name__)
-
-# Inicializa o dispatcher para lidar com mensagens
+bot = telegram.Bot(token=TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
-
-# Armazena comprovantes
 comprovantes = []
 
-# Envia resumo automático a cada hora
-def enviar_resumo_horario():
-    if comprovantes:
-        resumo = gerar_resumo_pendentes(comprovantes)
-        bot.send_message(chat_id=GROUP_ID, text=resumo)
+# --- TAXAS ---
+TAXAS_CARTAO = {
+    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
+    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
+    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
+}
+TAXA_PIX = 0.2
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(enviar_resumo_horario, 'interval', hours=1)
-scheduler.start()
+def formatar(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# Verifica se o usuário é o administrador
+def parse_valor(texto):
+    valor_str = re.findall(r"[\d.,]+", texto)[0].replace(".", "").replace(",", ".")
+    return float(valor_str)
+
+def calcular_liquido(valor, forma_pagamento, parcelas=1):
+    taxa = TAXA_PIX if forma_pagamento == "pix" else TAXAS_CARTAO.get(parcelas, 0)
+    liquido = valor * (1 - taxa / 100)
+    return round(liquido, 2), taxa
+
 def is_admin(update):
     return update.effective_user.id == ADMIN_ID
 
-# Manipuladores de comandos
-def ajuda(update, context):
-    comandos = """
-📌 *Comandos disponíveis:*
+def gerar_resumo():
+    total_pago = sum(c["liquido"] for c in comprovantes if c["pago"])
+    total_pendente = sum(c["liquido"] for c in comprovantes if not c["pago"])
+    return (
+        f"🧾 RESUMO AUTOMÁTICO:\n"
+        f"✅ Pagos: {formatar(total_pago)}\n"
+        f"💸 Pendentes: {formatar(total_pendente)}"
+    )
 
-1️⃣ `6.438,76 pix` → Calcula com taxa PIX (0.2%)
-2️⃣ `7.899,99 10x` → Calcula com taxa cartão (10x)
-3️⃣ ✅ → Marca último comprovante como *pago*
-4️⃣ `total que devo` → Total *pendente* ao lojista
-5️⃣ `listar pendentes` → Lista *todos pendentes*
-6️⃣ `listar pagos` → Lista *comprovantes pagos*
-7️⃣ `último comprovante` → Mostra último enviado
-8️⃣ `total geral` → Mostra total geral (pago + pendente)
-9️⃣ `ajuda` → Lista todos os comandos
+def processar_mensagem(update, context):
+    text = update.message.text.lower()
 
-🔒 *Apenas para admin:*
-• `/limpar tudo` → Apaga todos os comprovantes
-• `/corrigir valor` → Corrige valor do último
-"""
-    update.message.reply_text(comandos, parse_mode=telegram.ParseMode.MARKDOWN)
+    if text == "✅":
+        if comprovantes:
+            comprovantes[-1]["pago"] = True
+            update.message.reply_text("✅ Marcado como pago.")
+        else:
+            update.message.reply_text("Nenhum comprovante ainda.")
+        return
 
-def comando_total_devo(update, context):
-    total = sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
-    update.message.reply_text(f"💸 Total que você deve ao lojista: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    if text in ["total que devo", "total que eu devo"]:
+        total = sum(c["liquido"] for c in comprovantes if not c["pago"])
+        update.message.reply_text(f"💸 Você deve: {formatar(total)}")
+        return
 
-def comando_total_geral(update, context):
-    total = sum(c["valor_liquido"] for c in comprovantes)
-    update.message.reply_text(f"📊 Total geral dos comprovantes: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    if text == "listar pendentes":
+        pendentes = [c for c in comprovantes if not c["pago"]]
+        if pendentes:
+            msg = "\n".join([f"{formatar(c['liquido'])}" for c in pendentes])
+        else:
+            msg = "🎉 Nenhum comprovante pendente!"
+        update.message.reply_text(msg)
+        return
 
-def comando_listar_pendentes(update, context):
-    lista = listar_comprovantes(comprovantes, pago=False)
-    update.message.reply_text(lista)
+    if text == "listar pagos":
+        pagos = [c for c in comprovantes if c["pago"]]
+        if pagos:
+            msg = "\n".join([f"{formatar(c['liquido'])}" for c in pagos])
+        else:
+            msg = "Nenhum pago ainda."
+        update.message.reply_text(msg)
+        return
 
-def comando_listar_pagos(update, context):
-    lista = listar_comprovantes(comprovantes, pago=True)
-    update.message.reply_text(lista)
-
-def comando_ultimo(update, context):
-    if comprovantes:
-        ultimo = comprovantes[-1]
-        status = "✅ PAGO" if ultimo["pago"] else "⏳ PENDENTE"
+    if text == "último comprovante":
+        if not comprovantes:
+            update.message.reply_text("Nenhum comprovante ainda.")
+            return
+        c = comprovantes[-1]
+        status = "✅ PAGO" if c["pago"] else "⏳ PENDENTE"
         msg = (
             f"📄 Último comprovante:\n"
-            f"💰 Valor bruto: R$ {ultimo['valor_bruto']:,.2f}\n"
-            f"📉 Taxa aplicada: {ultimo['taxa']}%\n"
-            f"✅ Valor líquido: R$ {ultimo['valor_liquido']:,.2f}\n"
+            f"💰 Valor bruto: {formatar(c['bruto'])}\n"
+            f"📉 Taxa: {c['taxa']}%\n"
+            f"✅ Valor líquido: {formatar(c['liquido'])}\n"
             f"{status}"
-        ).replace(",", "X").replace(".", ",").replace("X", ".")
+        )
         update.message.reply_text(msg)
-    else:
-        update.message.reply_text("Nenhum comprovante enviado ainda.")
-
-def comando_limpar(update, context):
-    if not is_admin(update):
-        update.message.reply_text("🚫 Apenas o administrador pode usar este comando.")
         return
-    limpar_todos_os_comprovantes(comprovantes)
-    update.message.reply_text("🧹 Todos os comprovantes foram apagados!")
 
-def comando_corrigir(update, context):
-    if not is_admin(update):
-        update.message.reply_text("🚫 Apenas o administrador pode usar este comando.")
+    if text == "total geral":
+        total = sum(c["liquido"] for c in comprovantes)
+        update.message.reply_text(f"📊 Total geral: {formatar(total)}")
         return
-    if context.args:
-        novo_valor = context.args[0].replace(",", ".")
-        try:
-            novo_valor = float(novo_valor)
-            corrigir_ultimo_valor(comprovantes, novo_valor)
-            update.message.reply_text("✏️ Valor corrigido com sucesso.")
-        except:
-            update.message.reply_text("⚠️ Valor inválido.")
-    else:
-        update.message.reply_text("❗Use assim: /corrigir 1234.56")
 
-def marcar_como_pago(update, context):
+    if text == "ajuda":
+        comandos(update, context)
+        return
+
+    match_pix = re.match(r"^[\d.,]+\s*pix$", text)
+    match_cartao = re.match(r"^[\d.,]+\s*\d{1,2}x$", text)
+
+    if match_pix:
+        valor = parse_valor(text)
+        liquido, taxa = calcular_liquido(valor, "pix")
+        comprovantes.append({"bruto": valor, "liquido": liquido, "taxa": taxa, "pago": False})
+        hora = datetime.now(pytz.timezone("America/Sao_Paulo")).strftime("%H:%M")
+        msg = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: {formatar(valor)}\n"
+            f"📉 Taxa aplicada: {taxa:.2f}%\n"
+            f"✅ Valor líquido a pagar: {formatar(liquido)}\n"
+            f"🕒 Horário: {hora}"
+        )
+        update.message.reply_text(msg)
+        return
+
+    if match_cartao:
+        partes = text.split()
+        valor = parse_valor(partes[0])
+        parcelas = int(partes[1].replace("x", ""))
+        liquido, taxa = calcular_liquido(valor, "cartao", parcelas)
+        comprovantes.append({"bruto": valor, "liquido": liquido, "taxa": taxa, "pago": False})
+        msg = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: {formatar(valor)}\n"
+            f"💳 Parcelas: {parcelas}x\n"
+            f"📉 Taxa aplicada: {taxa:.2f}%\n"
+            f"✅ Valor líquido a pagar: {formatar(liquido)}"
+        )
+        update.message.reply_text(msg)
+        return
+
+def comandos(update, context):
+    text = """
+📌 *Comandos disponíveis:*
+• Envie: `749,99 pix`
+• Envie: `1.400,00 3x`
+• ✅ → marca último como pago
+• total que devo
+• listar pendentes
+• listar pagos
+• último comprovante
+• total geral
+• ajuda
+
+🔒 *Admin:*
+/limpar
+/corrigir 1234.56
+"""
+    update.message.reply_text(text, parse_mode=telegram.ParseMode.MARKDOWN)
+
+def limpar(update, context):
+    if not is_admin(update):
+        return update.message.reply_text("🚫 Apenas o admin.")
+    comprovantes.clear()
+    update.message.reply_text("🧹 Comprovantes apagados.")
+
+def corrigir(update, context):
+    if not is_admin(update):
+        return update.message.reply_text("🚫 Apenas o admin.")
+    try:
+        novo_valor = float(context.args[0])
+        if comprovantes:
+            comprovantes[-1]["bruto"] = novo_valor
+            liquido, taxa = calcular_liquido(novo_valor, "pix")  # Supondo PIX por padrão
+            comprovantes[-1]["liquido"] = liquido
+            comprovantes[-1]["taxa"] = taxa
+            update.message.reply_text("✏️ Valor corrigido.")
+        else:
+            update.message.reply_text("Nenhum comprovante.")
+    except:
+        update.message.reply_text("❗Use: /corrigir 1234.56")
+
+# Scheduler automático
+def resumo_agendado():
     if comprovantes:
-        comprovantes[-1]["pago"] = True
-        update.message.reply_text("✅ Comprovante marcado como *pago*!", parse_mode=telegram.ParseMode.MARKDOWN)
-    else:
-        update.message.reply_text("❗Ainda não há comprovantes.")
+        resumo = gerar_resumo()
+        bot.send_message(chat_id=GROUP_ID, text=resumo)
 
-# Lida com fotos e mensagens
-def mensagem(update, context):
-    texto = update.message.text or ""
-    anexos = update.message.photo or update.message.document
+scheduler = BackgroundScheduler()
+scheduler.add_job(resumo_agendado, 'interval', hours=1)
+scheduler.start()
 
-    if texto.strip() == "✅":
-        return marcar_como_pago(update, context)
+# --- Flask routes ---
+@app.route('/')
+def index():
+    return 'Bot ativo!'
 
-    if texto.lower() in ["total que devo", "total que eu devo"]:
-        return comando_total_devo(update, context)
-
-    if texto.lower() == "listar pendentes":
-        return comando_listar_pendentes(update, context)
-
-    if texto.lower() == "listar pagos":
-        return comando_listar_pagos(update, context)
-
-    if texto.lower() == "último comprovante":
-        return comando_ultimo(update, context)
-
-    if texto.lower() == "total geral":
-        return comando_total_geral(update, context)
-
-    if texto.lower() == "ajuda":
-        return ajuda(update, context)
-
-    if texto or anexos:
-        comprovante = processar_comprovante(update, context)
-        if comprovante:
-            comprovantes.append(comprovante)
-
-# Rota webhook
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = telegram.Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
     return "ok"
 
-# Rota raiz para teste
-@app.route('/')
-def index():
-    return 'Bot ativo!'
+# --- Handlers ---
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
+dispatcher.add_handler(CommandHandler("ajuda", comandos))
+dispatcher.add_handler(CommandHandler("limpar", limpar))
+dispatcher.add_handler(CommandHandler("corrigir", corrigir, pass_args=True))
 
-# Registra comandos
-dispatcher.add_handler(MessageHandler(Filters.text | Filters.photo | Filters.document, mensagem))
-dispatcher.add_handler(CommandHandler("ajuda", ajuda))
-dispatcher.add_handler(CommandHandler("total", comando_total_devo))
-dispatcher.add_handler(CommandHandler("totalgeral", comando_total_geral))
-dispatcher.add_handler(CommandHandler("listarpendentes", comando_listar_pendentes))
-dispatcher.add_handler(CommandHandler("listarpagos", comando_listar_pagos))
-dispatcher.add_handler(CommandHandler("último", comando_ultimo))
-dispatcher.add_handler(CommandHandler("limpar", comando_limpar))
-dispatcher.add_handler(CommandHandler("corrigir", comando_corrigir, pass_args=True))
-
-# Executa app no Render (porta dinâmica)
-if __name__ == '__main__':
+# --- Run ---
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
+
 
