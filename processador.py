@@ -1,141 +1,140 @@
 import re
 from datetime import datetime
-from unidecode import unidecode
 
 comprovantes = []
 
+# Tabela de taxas por numero de parcelas
 taxas_cartao = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
-    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99,
-    12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19,
-    17: 15.89, 18: 16.84
+    1: 4.39,
+    2: 5.19,
+    3: 6.19,
+    4: 6.59,
+    5: 7.19,
+    6: 8.29,
+    7: 9.19,
+    8: 9.99,
+    9: 10.29,
+    10: 10.88,
+    11: 11.99,
+    12: 12.52,
+    13: 13.69,
+    14: 14.19,
+    15: 14.69,
+    16: 15.19,
+    17: 15.89,
+    18: 16.84
 }
 
-def normalizar_texto(texto):
-    return unidecode(texto.lower().strip())
+def normalizar_valor(valor_str):
+    """Corrige valores com ponto e virgula misturados, ex: 1.550.00 ou 1,550.00"""
+    valor_str = valor_str.replace('.', '').replace(',', '.')
+    return float(valor_str)
 
-def extrair_info_comprovante(texto):
-    texto = normalizar_texto(texto)
-    valor = None
-    parcelas = 1
-    tipo = None
-
-    valor_match = re.search(r'([\d.,]+)', texto)
-    if valor_match:
-        valor_str = valor_match.group(1).replace('.', '').replace(',', '.')
-        valor = float(valor_str)
-
-    if 'pix' in texto:
-        tipo = 'pix'
+def calcular_taxa(valor, metodo, parcelas=1):
+    if metodo == 'pix':
+        taxa_percentual = 0.2
+    elif metodo == 'cartao':
+        taxa_percentual = taxas_cartao.get(parcelas, 0)
     else:
-        parcelas_match = re.search(r'(\d{1,2})x', texto)
-        if parcelas_match:
-            parcelas = int(parcelas_match.group(1))
-            tipo = 'cartao'
+        taxa_percentual = 0
+    valor_liquido = valor * (1 - taxa_percentual / 100)
+    return round(taxa_percentual, 2), round(valor_liquido, 2)
 
-    if valor and tipo:
-        return {
-            'valor_bruto': valor,
-            'parcelas': parcelas,
-            'tipo': tipo,
-            'horario': datetime.now().strftime('%H:%M'),
-            'pago': False
-        }
+def processar_mensagem(mensagem, user_id=None):
+    mensagem = mensagem.lower()
 
-    return None
+    if 'pix' in mensagem:
+        match = re.search(r"([\d.,]+)", mensagem)
+        if match:
+            valor = normalizar_valor(match.group(1))
+            taxa, valor_liquido = calcular_taxa(valor, 'pix')
+            comprovantes.append({
+                'valor': valor,
+                'metodo': 'PIX',
+                'parcelas': 1,
+                'taxa': taxa,
+                'liquido': valor_liquido,
+                'pago': False,
+                'hora': datetime.now().strftime("%H:%M")
+            })
+            return f"📄 Comprovante analisado:\n💰 Valor bruto: R$ {valor:.2f}\n💳 Parcelas: 1x (PIX)\n⏰ Horario: {datetime.now().strftime('%H:%M')}\n📉 Taxa aplicada: {taxa:.2f}%\n✅ Valor liquido a pagar: R$ {valor_liquido:.2f}"
 
-def calcular_valor_liquido(comprovante):
-    valor = comprovante['valor_bruto']
-    if comprovante['tipo'] == 'pix':
-        taxa = 0.2
-    else:
-        taxa = taxas_cartao.get(comprovante['parcelas'], 0)
-    valor_liquido = valor * (1 - taxa / 100)
-    comprovante['taxa'] = taxa
-    comprovante['valor_liquido'] = round(valor_liquido, 2)
-    return comprovante
+    elif re.search(r'([\d.,]+)\s*(\d{1,2})x', mensagem):
+        match = re.search(r'([\d.,]+)\s*(\d{1,2})x', mensagem)
+        if match:
+            valor = normalizar_valor(match.group(1))
+            parcelas = int(match.group(2))
+            taxa, valor_liquido = calcular_taxa(valor, 'cartao', parcelas)
+            comprovantes.append({
+                'valor': valor,
+                'metodo': 'CARTAO',
+                'parcelas': parcelas,
+                'taxa': taxa,
+                'liquido': valor_liquido,
+                'pago': False,
+                'hora': datetime.now().strftime("%H:%M")
+            })
+            return f"📄 Comprovante analisado:\n💰 Valor bruto: R$ {valor:.2f}\n💳 Parcelas: {parcelas}x\n⏰ Horario: {datetime.now().strftime('%H:%M')}\n📉 Taxa aplicada: {taxa:.2f}%\n✅ Valor liquido a pagar: R$ {valor_liquido:.2f}"
 
-def formatar_comprovante(comp):
-    return (
-        f"📄 Comprovante analisado:\n"
-        f"💰 Valor bruto: R$ {comp['valor_bruto']:.2f}\n"
-        f"💳 Parcelas: {comp['parcelas']}x\n"
-        f"⏰ Horario: {comp['horario']}\n"
-        f"📉 Taxa aplicada: {comp['taxa']}%\n"
-        f"✅ Valor liquido a pagar: R$ {comp['valor_liquido']:.2f}"
-    )
+    elif mensagem == '✅':
+        for comp in reversed(comprovantes):
+            if not comp['pago']:
+                comp['pago'] = True
+                return "✅ Ultimo comprovante marcado como pago."
+        return "Nenhum comprovante pendente encontrado para marcar como pago."
 
-def marcar_como_pago():
-    for comp in reversed(comprovantes):
-        if not comp['pago']:
-            comp['pago'] = True
-            return "✅ Comprovante marcado como pago."
-    return "Nenhum comprovante pendente para marcar como pago."
+    elif mensagem.startswith('total que devo'):
+        return total_pendentes()
+
+    elif mensagem.startswith('listar pendentes'):
+        return listar_pendentes()
+
+    elif mensagem.startswith('listar pagos'):
+        return listar_pagos()
+
+    elif mensagem.startswith('total geral'):
+        total = sum(c['valor'] for c in comprovantes)
+        liquido = sum(c['liquido'] for c in comprovantes)
+        return f"📊 Total geral bruto: R$ {total:.2f}\n💸 Total liquido: R$ {liquido:.2f}"
+
+    elif mensagem.startswith('ultimo comprovante'):
+        if comprovantes:
+            c = comprovantes[-1]
+            return f"📋 Ultimo comprovante:\n💰 Valor bruto: R$ {c['valor']:.2f}\n💳 Parcelas: {c['parcelas']}x\n📉 Taxa: {c['taxa']:.2f}%\n✅ Liquido: R$ {c['liquido']:.2f}\n📅 Hora: {c['hora']}\n🔒 Pago: {'✅' if c['pago'] else '❌'}"
+        return "Nenhum comprovante registrado ainda."
+
+    elif mensagem == 'ajuda':
+        return (
+            "📘 Comandos disponiveis:\n"
+            "- Envie valores assim: `6499,99 pix` ou `7899,99 10x`\n"
+            "- ✅ = marca ultimo comprovante como pago\n"
+            "- total que devo = soma dos pendentes\n"
+            "- listar pendentes = lista comprovantes nao pagos\n"
+            "- listar pagos = lista pagos\n"
+            "- total geral = soma de todos\n"
+            "- ultimo comprovante = exibe ultimo\n"
+        )
+
+    return "❌ Formato invalido. Envie algo como '6438,90 pix' ou '7899,99 10x'."
+
+def total_pendentes():
+    total = sum(c['liquido'] for c in comprovantes if not c['pago'])
+    return f"💰 Total pendente (liquido): R$ {total:.2f}"
 
 def listar_pendentes():
     pendentes = [c for c in comprovantes if not c['pago']]
     if not pendentes:
         return "Nenhum comprovante pendente."
-    return "\n\n".join([formatar_comprovante(c) for c in pendentes])
+    msg = "📋 Comprovantes pendentes:\n"
+    for i, c in enumerate(pendentes, 1):
+        msg += f"{i}. R$ {c['liquido']:.2f} ({c['parcelas']}x - {c['metodo']})\n"
+    return msg
 
 def listar_pagos():
     pagos = [c for c in comprovantes if c['pago']]
     if not pagos:
-        return "Nenhum comprovante pago."
-    return "\n\n".join([formatar_comprovante(c) for c in pagos])
-
-def total_que_devo():
-    total = sum(c['valor_liquido'] for c in comprovantes if not c['pago'])
-    return f"💰 Total que voce deve pagar: R$ {total:.2f}"
-
-def total_geral():
-    total = sum(c['valor_liquido'] for c in comprovantes)
-    return f"📊 Total geral de comprovantes: R$ {total:.2f}"
-
-def ultimo_comprovante():
-    if not comprovantes:
-        return "Nenhum comprovante registrado ainda."
-    return formatar_comprovante(comprovantes[-1])
-
-def comandos_suporte():
-    return (
-        "📋 *Comandos disponiveis:*\n"
-        "1️⃣ `123,45 pix` - Registra PIX com taxa de 0.2%\n"
-        "2️⃣ `789,99 10x` - Registra cartao com taxa da tabela\n"
-        "3️⃣ `✅` - Marca ultimo comprovante como pago\n"
-        "4️⃣ `total que devo` - Soma comprovantes pendentes\n"
-        "5️⃣ `listar pendentes` - Lista comprovantes em aberto\n"
-        "6️⃣ `listar pagos` - Lista comprovantes ja pagos\n"
-        "7️⃣ `ultimo comprovante` - Mostra o ultimo enviado\n"
-        "8️⃣ `total geral` - Total de tudo\n"
-    )
-
-def processar_mensagem(texto):
-    texto = normalizar_texto(texto)
-
-    if 'total que devo' in texto:
-        return total_que_devo()
-    elif 'listar pendentes' in texto:
-        return listar_pendentes()
-    elif 'listar pagos' in texto:
-        return listar_pagos()
-    elif 'ultimo comprovante' in texto:
-        return ultimo_comprovante()
-    elif 'total geral' in texto:
-        return total_geral()
-    elif 'ajuda' in texto or 'comandos' in texto:
-        return comandos_suporte()
-    elif texto == '✅':
-        return marcar_como_pago()
-    else:
-        comprovante = extrair_info_comprovante(texto)
-        if comprovante:
-            calcular_valor_liquido(comprovante)
-            comprovantes.append(comprovante)
-            return formatar_comprovante(comprovante)
-
-    return None
-
-def total_pendentes():
-    total = sum(c['valor_liquido'] for c in comprovantes if not c['pago'])
-    return total
+        return "Nenhum comprovante marcado como pago."
+    msg = "📗 Comprovantes pagos:\n"
+    for i, c in enumerate(pagos, 1):
+        msg += f"{i}. R$ {c['liquido']:.2f} ({c['parcelas']}x - {c['metodo']})\n"
+    return msg
