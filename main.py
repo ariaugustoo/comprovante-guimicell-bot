@@ -63,7 +63,7 @@ def total_que_devo(update, context):
 
 def ultimo_comprovante(update, context):
     if pendentes:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="🕘 Último comprovante pendente:\n" + pendentes[-1]["texto"])
+        context.bot.send_message(chat_id=update.effective_chat.id, text="🕘 Ultimo comprovante pendente:\n" + pendentes[-1]["texto"])
     else:
         context.bot.send_message(chat_id=update.effective_chat.id, text="📭 Nenhum comprovante pendente.")
 
@@ -88,7 +88,7 @@ def registrar_handlers():
     dispatcher.add_handler(CommandHandler("listar_pagos", listar_pagos))
     dispatcher.add_handler(CommandHandler("total_que_devo", total_que_devo))
     dispatcher.add_handler(CommandHandler("total_geral", total_geral))
-    dispatcher.add_handler(CommandHandler("último_comprovante", ultimo_comprovante))
+    dispatcher.add_handler(CommandHandler("ultimo_comprovante", ultimo_comprovante))
     dispatcher.add_handler(CommandHandler("limpar_tudo", limpar_tudo))
     dispatcher.add_handler(CommandHandler("✅", marcar_como_pago))
     dispatcher.add_handler(MessageHandler(Filters.text | Filters.photo | Filters.document, lambda update, context: processar_mensagem(update, context, pendentes, pagos)))
