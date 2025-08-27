@@ -5,3 +5,4 @@ APScheduler==3.6.3
 Pillow
 pytesseract
 requests
+Werkzeug==2.1.2
