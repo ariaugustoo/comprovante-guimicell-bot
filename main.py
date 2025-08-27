@@ -1,43 +1,42 @@
 from flask import Flask, request
-from processador import processar_mensagem, enviar_resumo_automatico
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
+from processador import processar_mensagem, gerar_resumo_automatico, comandos_handler
 import os
-import telegram
 import threading
 import time
 from dotenv import load_dotenv
 
 load_dotenv()
-
 TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
+bot = Bot(token=TOKEN)
 app = Flask(__name__)
-bot = telegram.Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-comprovantes = []
+dispatcher.add_handler(CommandHandler("ajuda", comandos_handler))
+dispatcher.add_handler(CommandHandler("listar_pendentes", comandos_handler))
+dispatcher.add_handler(CommandHandler("listar_pagos", comandos_handler))
+dispatcher.add_handler(CommandHandler("total_que_devo", comandos_handler))
+dispatcher.add_handler(CommandHandler("total_geral", comandos_handler))
+dispatcher.add_handler(CommandHandler("ultimo_comprovante", comandos_handler))
+dispatcher.add_handler(CommandHandler("corrigir_valor", comandos_handler))
+dispatcher.add_handler(CommandHandler("limpar_tudo", comandos_handler))
+dispatcher.add_handler(MessageHandler(Filters.text & Filters.group, processar_mensagem))
 
-def resumo_automatico():
+def agendador_resumo():
     while True:
-        time.sleep(3600)  # 1 hora
-        resumo = enviar_resumo_automatico(comprovantes)
-        if resumo:
-            bot.send_message(chat_id=GROUP_ID, text=resumo)
+        gerar_resumo_automatico(bot, GROUP_ID)
+        time.sleep(3600)
 
-@app.route('/webhook', methods=['POST'])
+@app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    if "message" in data:
-        msg = data['message']
-        chat_id = msg['chat']['id']
-        user_id = msg['from']['id']
-        texto = msg.get('text', '')
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "ok"
 
-        resposta = processar_mensagem(texto, comprovantes, user_id, ADMIN_ID)
-        if resposta:
-            bot.send_message(chat_id=chat_id, text=resposta)
-    return 'ok'
-
-if __name__ == '__main__':
-    threading.Thread(target=resumo_automatico).start()
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    threading.Thread(target=agendador_resumo).start()
+    app.run(port=10000)
