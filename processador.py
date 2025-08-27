@@ -135,3 +135,7 @@ def processar_mensagem(texto):
             return formatar_comprovante(comprovante)
 
     return None
+
+def total_pendentes():
+    total = sum(c['valor_liquido'] for c in comprovantes if not c['pago'])
+    return total
