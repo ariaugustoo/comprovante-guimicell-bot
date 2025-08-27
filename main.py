@@ -1,34 +1,50 @@
 import os
+import logging
 from flask import Flask, request
-from telegram import Bot, Update
+from telegram import Update
 from telegram.ext import Dispatcher, MessageHandler, Filters
-from dotenv import load_dotenv
+from telegram.ext import CallbackContext
 from processador import processar_mensagem
+from dotenv import load_dotenv
+from telegram import Bot
 
+# Carregar variáveis do .env
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 
+# Verificações de segurança
+if TOKEN is None or GROUP_ID is None:
+    raise ValueError("TELEGRAM_TOKEN ou GROUP_ID não configurados corretamente no .env.")
+
+# Iniciar bot e app Flask
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
+dispatcher = Dispatcher(bot, None, workers=1, use_context=True)
 
-dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+# Configurar logs
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-def handle_message(update, context):
-    processar_mensagem(update, context, GROUP_ID)
+# Handler para mensagens recebidas
+def handle_message(update: Update, context: CallbackContext):
+    if update.message:
+        processar_mensagem(update, context)
 
-dispatcher.add_handler(MessageHandler(Filters.all, handle_message))
+dispatcher.add_handler(MessageHandler(Filters.text | Filters.photo | Filters.document, handle_message))
 
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return "ok"
-
-@app.route("/", methods=["GET"])
+# Rota de teste
+@app.route('/')
 def index():
-    return "Bot rodando com sucesso!"
+    return 'Bot está online!'
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# Webhook do Telegram
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+    return 'ok'
+
+if __name__ == '__main__':
+    app.run(debug=False)
