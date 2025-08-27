@@ -1,70 +1,96 @@
 import os
-import logging
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import CommandHandler, Dispatcher, MessageHandler, Filters
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+from processador import processar_mensagem, listar_pendentes, listar_pagamentos, limpar_tudo, corrigir_valor, resumo_total
+from apscheduler.schedulers.background import BackgroundScheduler
+from pytz import timezone
+from datetime import datetime
 from dotenv import load_dotenv
-from processador import (
-    processar_mensagem, marcar_como_pago, listar_pendentes,
-    listar_pagos, exibir_ajuda, ultimo_comprovante,
-    total_pendente, total_geral, limpar_tudo, corrigir_valor
-)
 
-# Carrega variáveis de ambiente (.env)
 load_dotenv()
-TOKEN = os.getenv("TOKEN")
+
+TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Bot e app Flask
-bot = Bot(token=TOKEN)
 app = Flask(__name__)
+bot = Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
-# Ativa logs
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Define o fuso horário de Brasília
+tz_brasilia = timezone("America/Sao_Paulo")
 
-# Dispatcher do Telegram
-dispatcher = Dispatcher(bot, None, use_context=True)
+# Comandos básicos
+def start(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id, text="🤖 Bot de comprovantes ativado!")
 
-# -------------------- COMANDOS -------------------- #
+def ajuda(update, context):
+    comandos = """
+📋 *Comandos disponíveis:*
 
-# ✅ Comandos normais
-dispatcher.add_handler(CommandHandler("ajuda", exibir_ajuda))
-dispatcher.add_handler(CommandHandler("totalquedevo", total_pendente))
-dispatcher.add_handler(CommandHandler("listarpendentes", listar_pendentes))
-dispatcher.add_handler(CommandHandler("listarpagos", listar_pagos))
-dispatcher.add_handler(CommandHandler("ultimo", ultimo_comprovante))  # comando sem acento
-dispatcher.add_handler(CommandHandler("totalgeral", total_geral))
+1. `123,45 pix` – Aplica taxa de 0,2%
+2. `1234,56 3x` – Aplica taxa conforme parcelas
+3. `✅` – Marca como pago o último comprovante
+4. `total que devo` – Mostra total pendente
+5. `listar pendentes` – Lista comprovantes pendentes
+6. `listar pagos` – Lista comprovantes pagos
+7. `último comprovante` – Exibe o último enviado
+8. `total geral` – Mostra total pago + pendente
 
-# ✅ Versão alternativa: mensagem simples "último" (sem barra)
-dispatcher.add_handler(MessageHandler(Filters.text(["último", "Ultimo", "ULTIMO"]), ultimo_comprovante))
+🔒 *Apenas administrador:*
+- `/limpar_tudo`
+- `/corrigir_valor [ID] [NOVO_VALOR]`
+"""
+    context.bot.send_message(chat_id=update.effective_chat.id, text=comandos, parse_mode="Markdown")
 
-# ✅ Comandos restritos (apenas admin)
-def admin_only(func):
-    def wrapper(update, context):
-        if update.effective_user.id == ADMIN_ID:
-            return func(update, context)
+def limpar_tudo_cmd(update, context):
+    if update.effective_user.id == ADMIN_ID:
+        limpar_tudo()
+        context.bot.send_message(chat_id=update.effective_chat.id, text="🧹 Todos os comprovantes foram apagados.")
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Você não tem permissão para isso.")
+
+def corrigir_valor_cmd(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Você não tem permissão para isso.")
+        return
+    try:
+        id_corrigir = int(context.args[0])
+        novo_valor = float(str(context.args[1]).replace(",", "."))
+        sucesso = corrigir_valor(id_corrigir, novo_valor)
+        if sucesso:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=f"✅ Valor corrigido com sucesso.")
         else:
-            context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Acesso negado.")
-    return wrapper
+            context.bot.send_message(chat_id=update.effective_chat.id, text="❌ ID não encontrado.")
+    except:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="⚠️ Use o formato: /corrigir_valor [ID] [VALOR]")
 
-dispatcher.add_handler(CommandHandler("limpartudo", admin_only(limpar_tudo)))
-dispatcher.add_handler(CommandHandler("corrigirvalor", admin_only(corrigir_valor)))
+# Agendador de resumo automático a cada 1 hora
+def enviar_resumo_automatico():
+    texto = resumo_total()
+    bot.send_message(chat_id=GROUP_ID, text=texto)
 
-# ✅ Tratamento de mensagens normais (texto, imagem, etc.)
-dispatcher.add_handler(MessageHandler(Filters.all, processar_mensagem))
+scheduler = BackgroundScheduler(timezone=tz_brasilia)
+scheduler.add_job(enviar_resumo_automatico, 'interval', hours=1)
+scheduler.start()
 
-# -------------------- WEBHOOK FLASK -------------------- #
-
-@app.route('/')
-def home():
-    return 'Bot ativo com webhook!'
-
-@app.route(f'/{TOKEN}', methods=['POST'])
+# Rota do webhook (responde ao Telegram)
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return 'OK'
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return "OK", 200
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+# Comandos e mensagens
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("ajuda", ajuda))
+dispatcher.add_handler(CommandHandler("limpar_tudo", limpar_tudo_cmd))
+dispatcher.add_handler(CommandHandler("corrigir_valor", corrigir_valor_cmd, pass_args=True))
+dispatcher.add_handler(MessageHandler(Filters.text | Filters.photo | Filters.document.category("image/"), processar_mensagem))
+
+# Rota raiz (GET)
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot de Comprovantes ativo!", 200
