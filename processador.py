@@ -1,131 +1,145 @@
-import re
-from datetime import datetime
-from telegram import ParseMode
-from dotenv import load_dotenv
 import os
+import re
+from dotenv import load_dotenv
+from telegram import Bot
 
 load_dotenv()
 
+TOKEN = os.getenv("TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+bot = Bot(token=TOKEN)
 
 comprovantes = []
 
-TAXAS = {
-    "pix": 0.002,
-    "credito": {
-        1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719, 6: 0.0829,
-        7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
-        13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
+def formatar_valor(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def calcular_taxa(valor, tipo, parcelas=1):
+    taxas = {
+        "pix": 0.002,
+        "cartao": {
+            1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719,
+            6: 0.0829, 7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088,
+            11: 0.1199, 12: 0.1252, 13: 0.1369, 14: 0.1419, 15: 0.1469,
+            16: 0.1519, 17: 0.1589, 18: 0.1684
+        }
     }
-}
 
-def calcular_valor_liquido(valor, parcelas, tipo):
-    taxa = TAXAS["pix"] if tipo == "pix" else TAXAS["credito"].get(parcelas, 0)
-    return round(valor * (1 - taxa), 2), taxa * 100
-
-def extrair_valor(texto):
-    try:
-        valor_str = re.findall(r"[\d.,]+", texto)[0].replace(".", "").replace(",", ".")
-        return float(valor_str)
-    except:
-        return 0.0
-
-def processar_mensagem(update, context):
-    texto = update.message.text.lower()
-    user = update.message.from_user
-    horario = datetime.now().strftime("%H:%M")
-
-    if "pix" in texto:
-        valor = extrair_valor(texto)
-        valor_liquido, taxa = calcular_valor_liquido(valor, 1, "pix")
-        comprovantes.append({"user": user.id, "valor": valor, "liquido": valor_liquido, "tipo": "pix", "parcelas": 1, "pago": False})
-        msg = f"""📄 *Comprovante analisado:*
-💰 Valor bruto: R$ {valor:,.2f}
-📆 Tipo: PIX
-⏰ Horário: {horario}
-📉 Taxa aplicada: {taxa:.2f}%
-✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"""
-        update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-    elif re.search(r"\d+\s*x", texto) or re.search(r"x\s*\d+", texto):
-        valor = extrair_valor(texto)
-        parcelas = int(re.findall(r"(\d+)\s*x", texto)[0]) if "x" in texto else 1
-        valor_liquido, taxa = calcular_valor_liquido(valor, parcelas, "credito")
-        comprovantes.append({"user": user.id, "valor": valor, "liquido": valor_liquido, "tipo": "credito", "parcelas": parcelas, "pago": False})
-        msg = f"""📄 *Comprovante analisado:*
-💰 Valor bruto: R$ {valor:,.2f}
-📆 Parcelas: {parcelas}x
-⏰ Horário: {horario}
-📉 Taxa aplicada: {taxa:.2f}%
-✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"""
-        update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-    elif "✅" in texto:
-        if comprovantes:
-            comprovantes[-1]["pago"] = True
-            update.message.reply_text("🟩 Último comprovante marcado como *pago*.", parse_mode=ParseMode.MARKDOWN)
-
+    if tipo == "pix":
+        taxa = taxas["pix"]
     else:
-        update.message.reply_text("❗ Formato inválido. Envie no formato:\nEx: *7.500,00 pix* ou *4.000,00 12x*", parse_mode=ParseMode.MARKDOWN)
+        taxa = taxas["cartao"].get(parcelas, 0)
 
-def comandos_handler(update, context):
-    user_id = update.message.from_user.id
-    cmd = update.message.text.lower()
+    return valor * taxa, taxa
 
-    if "/listar_pendentes" in cmd:
-        pendentes = [c for c in comprovantes if not c["pago"]]
-        if not pendentes:
-            update.message.reply_text("✅ Nenhum comprovante pendente.")
-            return
-        resposta = "\n".join([f"R$ {c['liquido']:,.2f} ({c['parcelas']}x)" for c in pendentes])
-        update.message.reply_text(f"📌 *Pendentes:*\n{resposta}", parse_mode=ParseMode.MARKDOWN)
+def processar_mensagem(msg):
+    texto = msg.get("text", "").lower()
+    user_id = msg["from"]["id"]
+    nome = msg["from"].get("first_name", "Usuário")
 
-    elif "/listar_pagos" in cmd:
+    if texto == "listar pagos":
         pagos = [c for c in comprovantes if c["pago"]]
         if not pagos:
-            update.message.reply_text("⚠️ Nenhum comprovante marcado como pago.")
-            return
-        resposta = "\n".join([f"R$ {c['liquido']:,.2f} ({c['parcelas']}x)" for c in pagos])
-        update.message.reply_text(f"✅ *Pagos:*\n{resposta}", parse_mode=ParseMode.MARKDOWN)
+            resposta = "📄 Nenhum comprovante pago ainda."
+        else:
+            resposta = "\n".join([f"{formatar_valor(c['valor'])} {'✅' if c['pago'] else ''}" for c in pagos])
+        bot.send_message(chat_id=GROUP_ID, text=resposta)
 
-    elif "/total_que_devo" in cmd:
-        total = sum(c["liquido"] for c in comprovantes if not c["pago"])
-        update.message.reply_text(f"💰 *Total a pagar:* R$ {total:,.2f}", parse_mode=ParseMode.MARKDOWN)
+    elif texto == "listar pendentes":
+        pendentes = [c for c in comprovantes if not c["pago"]]
+        if not pendentes:
+            resposta = "🎉 Todos os comprovantes foram pagos!"
+        else:
+            resposta = "\n".join([f"{formatar_valor(c['valor'])}" for c in pendentes])
+        bot.send_message(chat_id=GROUP_ID, text=resposta)
 
-    elif "/total_geral" in cmd:
-        total = sum(c["liquido"] for c in comprovantes)
-        update.message.reply_text(f"📊 *Total geral:* R$ {total:,.2f}", parse_mode=ParseMode.MARKDOWN)
+    elif texto == "total que devo":
+        total = sum(c["valor"] for c in comprovantes if not c["pago"])
+        bot.send_message(chat_id=GROUP_ID, text=f"💸 Total a pagar: {formatar_valor(total)}")
 
-    elif "/ultimo_comprovante" in cmd:
-        if not comprovantes:
-            update.message.reply_text("Nenhum comprovante enviado ainda.")
-            return
-        c = comprovantes[-1]
-        update.message.reply_text(f"📄 Último: R$ {c['liquido']:,.2f} - {c['parcelas']}x - {'Pago' if c['pago'] else 'Pendente'}", parse_mode=ParseMode.MARKDOWN)
+    elif texto == "total geral":
+        total = sum(c["valor"] for c in comprovantes)
+        bot.send_message(chat_id=GROUP_ID, text=f"📊 Total geral de comprovantes: {formatar_valor(total)}")
 
-    elif "/corrigir_valor" in cmd and user_id == ADMIN_ID:
-        update.message.reply_text("🛠️ Em breve: comando para editar valor de um comprovante.")
+    elif texto == "último comprovante":
+        if comprovantes:
+            ult = comprovantes[-1]
+            status = "✅ Pago" if ult["pago"] else "⏳ Pendente"
+            resposta = f"📄 Último comprovante:\n💰 Valor: {formatar_valor(ult['valor'])}\n💳 Parcelas: {ult.get('parcelas', 'PIX')}\n📉 Status: {status}"
+        else:
+            resposta = "Nenhum comprovante enviado ainda."
+        bot.send_message(chat_id=GROUP_ID, text=resposta)
 
-    elif "/limpar_tudo" in cmd and user_id == ADMIN_ID:
+    elif texto.startswith("✅"):
+        if comprovantes:
+            comprovantes[-1]["pago"] = True
+            bot.send_message(chat_id=GROUP_ID, text="✅ Marcado como pago.")
+        else:
+            bot.send_message(chat_id=GROUP_ID, text="Nenhum comprovante para marcar como pago.")
+
+    elif re.match(r"^[\d.,]+\s*pix$", texto):
+        valor_str = texto.split()[0].replace(".", "").replace(",", ".")
+        valor = float(valor_str)
+        taxa_valor, taxa_perc = calcular_taxa(valor, "pix")
+        liquido = valor - taxa_valor
+        comprovantes.append({"valor": valor, "pago": False, "tipo": "pix"})
+        msg = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: {formatar_valor(valor)}\n"
+            f"📉 Taxa aplicada: {round(taxa_perc*100, 2)}%\n"
+            f"✅ Valor líquido a pagar: {formatar_valor(liquido)}"
+        )
+        bot.send_message(chat_id=GROUP_ID, text=msg)
+
+    elif re.match(r"^[\d.,]+\s*\d{1,2}x$", texto):
+        partes = texto.split()
+        valor_str = partes[0].replace(".", "").replace(",", ".")
+        valor = float(valor_str)
+        parcelas = int(partes[1].replace("x", ""))
+        taxa_valor, taxa_perc = calcular_taxa(valor, "cartao", parcelas)
+        liquido = valor - taxa_valor
+        comprovantes.append({"valor": valor, "pago": False, "tipo": "cartao", "parcelas": parcelas})
+        msg = (
+            f"📄 Comprovante analisado:\n"
+            f"💰 Valor bruto: {formatar_valor(valor)}\n"
+            f"💳 Parcelas: {parcelas}x\n"
+            f"📉 Taxa aplicada: {round(taxa_perc*100, 2)}%\n"
+            f"✅ Valor líquido a pagar: {formatar_valor(liquido)}"
+        )
+        bot.send_message(chat_id=GROUP_ID, text=msg)
+
+    elif texto == "/limpar tudo" and user_id == ADMIN_ID:
         comprovantes.clear()
-        update.message.reply_text("🗑️ Todos os comprovantes foram apagados com sucesso.")
+        bot.send_message(chat_id=GROUP_ID, text="🧹 Todos os comprovantes foram apagados com sucesso!")
 
-    elif "/ajuda" in cmd:
-        update.message.reply_text("""📘 *Comandos disponíveis:*
-/listar_pendentes
-/listar_pagos
-/total_que_devo
-/total_geral
-/ultimo_comprovante
-/ajuda
+    elif texto == "/corrigir valor" and user_id == ADMIN_ID:
+        bot.send_message(chat_id=GROUP_ID, text="🔧 Envie o novo valor para corrigir o último comprovante.")
 
-🔒 (admin)
-/limpar_tudo
-/corrigir_valor
-""", parse_mode=ParseMode.MARKDOWN)
+    elif texto.startswith("🧮 resumo agora") and user_id == ADMIN_ID:
+        total_pago = sum(c["valor"] for c in comprovantes if c["pago"])
+        total_pendente = sum(c["valor"] for c in comprovantes if not c["pago"])
+        resumo = (
+            f"🧾 RESUMO ATUAL:\n"
+            f"✅ Pagos: {formatar_valor(total_pago)}\n"
+            f"💸 Pendentes: {formatar_valor(total_pendente)}"
+        )
+        bot.send_message(chat_id=GROUP_ID, text=resumo)
 
-def gerar_resumo_automatico(bot, group_id):
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    total = sum(c["liquido"] for c in pendentes)
-    if total > 0:
-        bot.send_message(chat_id=group_id, text=f"⏰ *Resumo automático:*\n💰 Total a pagar: R$ {total:,.2f}", parse_mode=ParseMode.MARKDOWN)
+    elif texto == "ajuda":
+        comandos = (
+            "📋 *Comandos disponíveis:*\n"
+            "- Envie: `1349,99 pix` → Taxa 0,2%\n"
+            "- Envie: `4200,00 3x` → Parcelado\n"
+            "- ✅ → marca último como pago\n"
+            "- `listar pagos`\n"
+            "- `listar pendentes`\n"
+            "- `total que devo`\n"
+            "- `último comprovante`\n"
+            "- `total geral`\n"
+            "- `ajuda`\n"
+            "- `/limpar tudo` *(admin)*\n"
+            "- `/corrigir valor` *(admin)*"
+        )
+        bot.send_message(chat_id=GROUP_ID, text=comandos, parse_mode="Markdown")
