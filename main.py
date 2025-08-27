@@ -11,15 +11,13 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 
 bot = Bot(token=TOKEN)
-
 app = Flask(__name__)
-
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
 def handle_message(update, context):
     message = update.message
     if message.chat.id == GROUP_ID:
-        resposta = processar_mensagem(message)
+        resposta = processar_mensagem(update, bot, GROUP_ID)
         if resposta:
             context.bot.send_message(chat_id=GROUP_ID, text=resposta)
 
@@ -37,5 +35,5 @@ def index():
     return "Bot de Comprovantes ativo", 200
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # Corrigido para uso no Render
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
