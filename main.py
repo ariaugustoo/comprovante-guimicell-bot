@@ -4,8 +4,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
 from processador import processar_mensagem, calcular_total, marcar_como_pago, listar_pendentes, listar_pagos, mostrar_ultimo, total_geral
 
-TOKEN = "8044957045:AAE8AmsmV3LYwqPUi6BXmp_I9ePgywg8OIA"
-GROUP_ID = -1002626449000
+TOKEN = "8293056690:AAEYab0kMkXvnCR8A3Su4bn4j3uV6WMmcrk"
+GROUP_ID = -1003089523643
 WEBHOOK_URL = "https://comprovante-guimicell-bot-vmvr.onrender.com"
 
 logging.basicConfig(
