@@ -1,14 +1,16 @@
 services:
   - type: web
     name: comprovante-guimicell-bot
-    env: python
+    runtime: python
+    region: oregon
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python3 main.py
     envVars:
       - key: BOT_TOKEN
-        sync: false
+        value: 8293056690:AAEYab0kMkXvnCR8A3Su4bn4j3uV6WMmcrk
       - key: GROUP_ID
-        sync: false
+        value: -1003089523643
       - key: ADMIN_ID
-        sync: false
+        value: 123456789  # Substitua pelo SEU Telegram ID de administrador
+    autoDeploy: true
