@@ -1,15 +1,26 @@
-from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 import os
-from dotenv import load_dotenv
+import logging
+from flask import Flask, request
+from telegram import Update
+from telegram.ext import (
+    Dispatcher,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+)
 from processador import (
     processar_mensagem,
     marcar_como_pago,
+    listar_pendentes,
+    listar_pagamentos,
+    solicitar_pagamento,
+    total_a_pagar,
     total_pendentes,
-    total_bruto,
-    registrar_pagamento_solicitado
 )
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from telegram.bot import Bot
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -17,66 +28,62 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-app = Flask(__name__)
 bot = Bot(token=TOKEN)
+app = Flask(__name__)
+dispatcher = Dispatcher(bot, None, workers=1, use_context=True)
 
-# Dispatcher com suporte a webhooks
-dispatcher = Dispatcher(bot, None, workers=1)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# HANDLERS
-def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Bot ativo!")
+# === COMANDOS ===
 
 def ajuda(update, context):
-    comandos = (
-        "📋 Comandos disponíveis:\n"
-        "- Enviar valor + pix (ex: 1234,56 pix)\n"
-        "- Enviar valor + parcelas (ex: 2000 6x)\n"
-        "- pagamento feito ✅\n"
-        "- quanto devo (valor líquido com taxas)\n"
-        "- total a pagar (valor bruto)\n"
-        "- solicitar pagamento"
+    texto = (
+        "🛠 *Comandos disponíveis:*\n\n"
+        "1. `999 pix` → calcula repasse com taxa 0.2%\n"
+        "2. `999 3x` → calcula repasse com taxa de cartão conforme parcelas\n"
+        "3. `pagamento feito` → marca último pagamento como quitado\n"
+        "4. `quanto devo` → mostra valor líquido total ainda a pagar\n"
+        "5. `total a pagar` → mostra valor bruto pendente\n"
+        "6. `listar pendentes` → lista comprovantes não pagos\n"
+        "7. `listar pagos` → lista comprovantes quitados\n"
+        "8. `solicitar pagamento` → permite lojista pedir valor manual\n"
     )
-    context.bot.send_message(chat_id=update.effective_chat.id, text=comandos)
+    context.bot.send_message(chat_id=update.effective_chat.id, text=texto, parse_mode='Markdown')
 
-def solicitar_pagamento(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor a solicitar:")
-    return
+# === HANDLERS ===
 
-def mensagem(update, context):
-    texto = update.message.text.lower()
-    if texto == "pagamento feito" and update.effective_user.id == ADMIN_ID:
-        resposta = marcar_como_pago()
-        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
-    elif "solicitar pagamento" in texto:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor e chave pix:")
-    elif "quanto devo" in texto:
-        valor = total_pendentes()
-        context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Devo ao lojista: R$ {valor:.2f}")
-    elif "total a pagar" in texto:
-        valor = total_bruto()
-        context.bot.send_message(chat_id=update.effective_chat.id, text=f"📦 Valor bruto total pendente: R$ {valor:.2f}")
-    else:
-        resposta = processar_mensagem(texto)
-        if resposta:
-            context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+dispatcher.add_handler(CommandHandler("start", ajuda))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^ajuda$"), ajuda))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^pagamento feito$"), marcar_como_pago))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^listar pendentes$"), listar_pendentes))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^listar pagos$"), listar_pagamentos))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^solicitar pagamento$"), solicitar_pagamento))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^quanto devo$"), total_pendentes))
+dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^total a pagar$"), total_a_pagar))
+dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), processar_mensagem))
 
-# REGISTRO DOS HANDLERS
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("ajuda", ajuda))
-dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), mensagem))
+# === AGENDADOR PARA RESUMO AUTOMÁTICO ===
 
-# FLASK ROUTES
-@app.route('/')
-def index():
-    return "Bot do Comprovante está ativo!"
+def resumo_automatico():
+    from processador import enviar_resumo_automatico
+    enviar_resumo_automatico(bot, GROUP_ID)
 
-@app.route('/webhook', methods=["POST"])
+scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
+scheduler.add_job(resumo_automatico, "cron", hour="*", minute=0)
+scheduler.start()
+
+# === WEBHOOK ===
+
+@app.route(f"/webhook", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return 'OK'
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return "OK", 200
 
-# INICIALIZAÇÃO DO WEBHOOK
-if __name__ == '__main__':
-    app.run(debug=False)
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot ativo!"
+
+if __name__ == "__main__":
+    app.run(port=10000)
