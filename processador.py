@@ -1,89 +1,77 @@
-import re
-from datetime import datetime
-from pytz import timezone
+from datetime import datetime, timedelta
+import pytz
 
 comprovantes = []
-pagamentos = []
+solicitacoes_pagamento = {}
 
-def parse_valor(mensagem):
-    valor_str = mensagem.replace('.', '').replace(',', '.')
+taxas_cartao = {
+    i: taxa for i, taxa in zip(
+        range(1, 19),
+        [4.39, 5.19, 6.19, 6.59, 7.19, 8.29, 9.19, 9.99, 10.29,
+         10.88, 11.99, 12.52, 13.69, 14.19, 14.69, 15.19, 15.89, 16.84]
+    )
+}
+TAXA_PIX = 0.2
+
+def normalizar_valor(texto):
     try:
-        return float(re.findall(r'[\d.]+', valor_str)[0])
-    except (IndexError, ValueError):
+        return float(texto.replace("R$", "").replace(" ", "").replace(".", "").replace(",", "."))
+    except:
         return None
-
-def calcular_taxa(valor, parcelas=None):
-    if parcelas:
-        taxas = {
-            1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
-            7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99,
-            12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19,
-            17: 15.89, 18: 16.84
-        }
-        taxa = taxas.get(parcelas, 0)
-    else:
-        taxa = 0.2
-    return round(valor * (taxa / 100), 2), taxa
 
 def processar_mensagem(update):
     mensagem = update.message.text.lower()
-    chat_id = update.message.chat_id
-    now = datetime.now(timezone('America/Sao_Paulo')).strftime("%H:%M")
+    user_id = update.effective_user.id
+    horario = datetime.now(pytz.timezone('America/Sao_Paulo')).strftime("%H:%M")
 
     if "pix" in mensagem:
-        valor = parse_valor(mensagem)
-        if valor:
-            taxa_valor, taxa_percentual = calcular_taxa(valor)
-            liquido = round(valor - taxa_valor, 2)
-            comprovantes.append({'tipo': 'PIX', 'valor': valor, 'liquido': liquido, 'horario': now, 'pago': False})
-            update.message.reply_text(
-                f"📄 Comprovante analisado:\n"
-                f"💰 Valor bruto: R$ {valor:,.2f}\n"
-                f"💰 Tipo: PIX\n"
-                f"⏰ Horário: {now}\n"
-                f"📉 Taxa aplicada: {taxa_percentual}%\n"
-                f"✅ Valor líquido a pagar: R$ {liquido:,.2f}"
-            )
-        else:
-            update.message.reply_text("❌ Valor inválido. Tente novamente.")
-        return
+        bruto = normalizar_valor(mensagem)
+        taxa = TAXA_PIX
+        liquido = bruto * (1 - taxa / 100)
+        comprovantes.append({"user_id": user_id, "bruto": bruto, "tipo": "PIX", "taxa": taxa, "liquido": liquido, "pago": False, "horario": horario})
+        resposta = f"📄 Comprovante analisado:\n💰 Valor bruto: R$ {bruto:,.2f}\n💰 Tipo: PIX\n⏰ Horário: {horario}\n📉 Taxa aplicada: {taxa}%\n✅ Valor líquido a pagar: R$ {liquido:,.2f}"
+        update.message.reply_text(resposta.replace(",", "X").replace(".", ",").replace("X", "."))
+    elif "x" in mensagem:
+        partes = mensagem.split("x")
+        bruto = normalizar_valor(partes[0])
+        parcelas = int(partes[1].strip())
+        taxa = taxas_cartao.get(parcelas, 0)
+        liquido = bruto * (1 - taxa / 100)
+        comprovantes.append({"user_id": user_id, "bruto": bruto, "tipo": f"{parcelas}x", "taxa": taxa, "liquido": liquido, "pago": False, "horario": horario})
+        resposta = f"📄 Comprovante analisado:\n💰 Valor bruto: R$ {bruto:,.2f}\n💰 Tipo: Cartão {parcelas}x\n⏰ Horário: {horario}\n📉 Taxa aplicada: {taxa}%\n✅ Valor líquido a pagar: R$ {liquido:,.2f}"
+        update.message.reply_text(resposta.replace(",", "X").replace(".", ",").replace("X", "."))
 
-    parcelas_match = re.search(r'(\d+(?:[.,]\d{2})?)\s*(\d{1,2})x', mensagem)
-    if parcelas_match:
-        valor = float(parcelas_match.group(1).replace('.', '').replace(',', '.'))
-        parcelas = int(parcelas_match.group(2))
-        taxa_valor, taxa_percentual = calcular_taxa(valor, parcelas)
-        liquido = round(valor - taxa_valor, 2)
-        comprovantes.append({'tipo': f'{parcelas}x', 'valor': valor, 'liquido': liquido, 'horario': now, 'pago': False})
-        update.message.reply_text(
-            f"📄 Comprovante analisado:\n"
-            f"💰 Valor bruto: R$ {valor:,.2f}\n"
-            f"💰 Tipo: Cartão ({parcelas}x)\n"
-            f"⏰ Horário: {now}\n"
-            f"📉 Taxa aplicada: {taxa_percentual}%\n"
-            f"✅ Valor líquido a pagar: R$ {liquido:,.2f}"
-        )
-        return
+def marcar_como_pago(usuario_id):
+    if usuario_id in solicitacoes_pagamento:
+        valor_pendente = solicitacoes_pagamento.pop(usuario_id)
+        for c in comprovantes:
+            if not c["pago"] and valor_pendente > 0:
+                if c["liquido"] <= valor_pendente:
+                    valor_pendente -= c["liquido"]
+                    c["pago"] = True
+                else:
+                    c["liquido"] -= valor_pendente
+                    c["bruto"] = c["liquido"] / (1 - c["taxa"] / 100)
+                    valor_pendente = 0
+        return "✅ Pagamento parcial registrado com sucesso."
+    else:
+        for c in comprovantes:
+            if not c["pago"]:
+                c["pago"] = True
+        return "✅ Todos os comprovantes foram marcados como pagos."
 
-    if "pagamento feito" in mensagem:
-        valor = parse_valor(mensagem)
-        if valor:
-            pagamentos.append(valor)
-            update.message.reply_text(
-                f"✅ Pagamento de R$ {valor:,.2f} marcado como feito com sucesso."
-            )
-        else:
-            update.message.reply_text("❌ Valor inválido.")
-        return
+def quanto_devo():
+    return sum(c["liquido"] for c in comprovantes if not c["pago"])
 
-    if "quanto devo" in mensagem:
-        total_liquido = sum(c['liquido'] for c in comprovantes if not c['pago']) - sum(pagamentos)
-        update.message.reply_text(f"💰 Devo ao lojista: R$ {total_liquido:,.2f}")
-        return
+def total_a_pagar():
+    return sum(c["bruto"] for c in comprovantes if not c["pago"])
 
-    if "total a pagar" in mensagem:
-        total_bruto = sum(c['valor'] for c in comprovantes if not c['pago'])
-        update.message.reply_text(f"💵 Total bruto (pendente): R$ {total_bruto:,.2f}")
-        return
+def iniciar_solicitacao_pagamento(user_id):
+    solicitacoes_pagamento[user_id] = None
 
-    update.message.reply_text("❌ Comando não reconhecido.\nDigite `ajuda` para ver as opções.")
+def registrar_pagamento_solicitado(user_id, valor_str):
+    valor = normalizar_valor(valor_str)
+    if valor is not None and user_id in solicitacoes_pagamento:
+        solicitacoes_pagamento[user_id] = valor
+        return f"📥 Solicitação registrada: pagamento de R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return None
