@@ -1,48 +1,64 @@
 import os
 from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
+import telegram
 from processador import (
     processar_mensagem,
     marcar_como_pago,
     listar_pendentes,
     listar_pagamentos,
     solicitar_pagamento,
-    mostrar_ajuda,
     limpar_dados,
-    corrigir_valor,
+    corrigir_valor_comprovante,
     quanto_devo,
-    total_a_pagar
+    total_a_pagar,
+    exibir_ajuda
 )
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+TOKEN = os.environ["TELEGRAM_TOKEN"]
+GROUP_ID = os.environ["GROUP_ID"]
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 
-bot = Bot(token=TOKEN)
+bot = telegram.Bot(token=TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot, None, workers=0)
 
-# Handlers de texto
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
+@app.route('/')
+def home():
+    return 'Bot de comprovantes ativo!'
 
-# Comandos
-dispatcher.add_handler(CommandHandler("pagamento_feito", marcar_como_pago))
-dispatcher.add_handler(CommandHandler("listar_pendentes", listar_pendentes))
-dispatcher.add_handler(CommandHandler("listar_pagos", listar_pagamentos))
-dispatcher.add_handler(CommandHandler("solicitar_pagamento", solicitar_pagamento))
-dispatcher.add_handler(CommandHandler("ajuda", mostrar_ajuda))
-dispatcher.add_handler(CommandHandler("limpar_tudo", limpar_dados))
-dispatcher.add_handler(CommandHandler("corrigir_valor", corrigir_valor))
-dispatcher.add_handler(CommandHandler("quanto_devo", quanto_devo))
-dispatcher.add_handler(CommandHandler("total_a_pagar", total_a_pagar))
-
-@app.route(f"/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return "ok"
+    update = telegram.Update.de_json(request.get_json(force=True), bot)
+    message = update.message
+
+    if message and message.text:
+        texto = message.text.lower()
+
+        # Comandos administrativos protegidos
+        if texto.startswith("limpar tudo") and message.from_user.id == ADMIN_ID:
+            resposta = limpar_dados()
+        elif texto.startswith("corrigir valor") and message.from_user.id == ADMIN_ID:
+            resposta = corrigir_valor_comprovante(texto)
+        elif texto.startswith("pagamento feito"):
+            resposta = marcar_como_pago(texto)
+        elif texto == "quanto devo":
+            resposta = quanto_devo()
+        elif texto == "total a pagar":
+            resposta = total_a_pagar()
+        elif texto == "listar pendentes":
+            resposta = listar_pendentes()
+        elif texto == "listar pagos":
+            resposta = listar_pagamentos()
+        elif texto == "solicitar pagamento":
+            resposta = solicitar_pagamento(bot, message)
+            return "OK"
+        elif texto == "ajuda":
+            resposta = exibir_ajuda()
+        else:
+            resposta = processar_mensagem(texto)
+
+        bot.send_message(chat_id=message.chat.id, text=resposta)
+
+    return "OK"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
