@@ -16,14 +16,6 @@ def formatar_valor(valor):
 def processar_mensagem(texto):
     texto = texto.replace("r$", "").replace("reais", "").replace(",", ".").strip().lower()
 
-    # Comando "solicitar pagamento 123,45"
-    if texto.startswith("solicitar pagamento"):
-        try:
-            valor = float(texto.replace("solicitar pagamento", "").strip())
-            return abater_valor_manual(valor)
-        except:
-            return "❌ Valor inválido no comando 'solicitar pagamento'."
-
     tipo_pagamento = None
     parcelas = 0
     valor = None
@@ -67,7 +59,7 @@ def processar_mensagem(texto):
     resposta = (
         "📄 *Comprovante analisado:*\n"
         f"💰 *Valor bruto:* {formatar_valor(valor)}\n"
-        f"💰*Tipo:* {tipo_pagamento}\n"
+        f"💰 *Tipo:* {tipo_pagamento}\n"
         f"⏰ *Horário:* {horario}\n"
         f"📉 *Taxa aplicada:* {taxa:.2f}%\n"
         f"✅ *Valor líquido a pagar:* {formatar_valor(valor_liquido)}"
@@ -120,22 +112,3 @@ def total_liquido_pendente():
 def total_bruto_pendente():
     total = sum(c["valor"] for c in comprovantes if not c["pago"])
     return f"💰 *Total bruto (sem desconto):* {formatar_valor(total)}"
-
-def abater_valor_manual(valor_abater):
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    if not pendentes:
-        return "❌ Não há comprovantes pendentes para abater."
-
-    restante = valor_abater
-    for c in pendentes:
-        if not c["pago"]:
-            if restante >= c["liquido"]:
-                restante -= c["liquido"]
-                c["pago"] = True
-            else:
-                break
-
-    abatido = valor_abater - restante
-    if abatido == 0:
-        return "❌ Nenhum valor foi abatido. Verifique o total pendente."
-    return f"📉 Valor de {formatar_valor(abatido)} abatido dos comprovantes pendentes."
