@@ -10,6 +10,7 @@ taxas_cartao = {
     16: 15.19, 17: 15.89, 18: 16.84
 }
 
+
 def normalizar_valor(valor_str):
     valor_str = re.sub(r'[^\d,\.]', '', valor_str)
     valor_str = valor_str.replace('.', '').replace(',', '.')
@@ -17,6 +18,7 @@ def normalizar_valor(valor_str):
         return float(valor_str)
     except ValueError:
         return None
+
 
 def registrar_pagamento(valor_str, tipo, parcelas=None):
     valor = normalizar_valor(valor_str)
@@ -66,12 +68,28 @@ def registrar_pagamento(valor_str, tipo, parcelas=None):
 
     return mensagem
 
+
+def processar_mensagem(texto):
+    if "pix" in texto:
+        valor_str = texto.replace("pix", "").strip()
+        return registrar_pagamento(valor_str, "PIX")
+
+    match = re.match(r"([\d.,]+)\s*(\d{1,2})x", texto)
+    if match:
+        valor_str = match.group(1)
+        parcelas = int(match.group(2))
+        return registrar_pagamento(valor_str, "CARTAO", parcelas)
+
+    return "❌ Formato inválido. Tente '1000 pix' ou '1000 6x'"
+
+
 def marcar_como_pago():
     for comprovante in comprovantes:
         if not comprovante["pago"]:
             comprovante["pago"] = True
             return f"✅ Comprovante de R$ {comprovante['valor_bruto']:.2f} marcado como *pago*."
     return "🎉 Todos os comprovantes já foram pagos!"
+
 
 def listar_pendentes():
     pendentes = [c for c in comprovantes if not c["pago"]]
@@ -84,6 +102,7 @@ def listar_pendentes():
     resposta += f"\n💰 Total líquido pendente: R$ {total:.2f}"
     return resposta
 
+
 def listar_pagos():
     pagos = [c for c in comprovantes if c["pago"]]
     if not pagos:
@@ -95,15 +114,22 @@ def listar_pagos():
     resposta += f"\n💵 Total já pago: R$ {total:.2f}"
     return resposta
 
+
 def total_liquido():
     pendentes = [c for c in comprovantes if not c["pago"]]
     total = sum(c["valor_liquido"] for c in pendentes)
     return f"📉 Total líquido pendente: R$ {total:.2f}"
 
+
 def total_a_pagar():
     pendentes = [c for c in comprovantes if not c["pago"]]
     total = sum(c["valor_bruto"] for c in pendentes)
     return f"💸 Total bruto a pagar: R$ {total:.2f}"
+
+
+def solicitar_pagamento(valor_str):
+    return registrar_pagamento(valor_str, "PIX")
+
 
 def ajuda_comandos():
     return (
@@ -116,11 +142,6 @@ def ajuda_comandos():
         "• listar pendentes → Lista os comprovantes pendentes\n"
         "• listar pagos → Lista os comprovantes pagos\n"
         "• total líquido → Mostra total líquido pendente\n"
-        "• total a pagar → Mostra total bruto a pagar"
+        "• total a pagar → Mostra total bruto a pagar\n"
+        "• ajuda → Exibe esta lista de comandos"
     )
-
-def solicitar_pagamento(valor_str):
-    valor = normalizar_valor(valor_str)
-    if valor is None:
-        return "❌ Valor inválido. Tente: 1000,00 ou 1000.00"
-    return registrar_pagamento(valor_str, "PIX")
