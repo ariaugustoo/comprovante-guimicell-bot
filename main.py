@@ -1,40 +1,56 @@
-import os
 from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, Filters
-from processador import processar_mensagem
-from dotenv import load_dotenv
+import os
+from processador import (
+    processar_mensagem,
+    marcar_como_pago,
+    listar_pendentes,
+    listar_pagos,
+    mostrar_ajuda,
+    solicitar_pagamento,
+    total_liquido,
+    total_bruto
+)
+import telegram
 
-load_dotenv()
+app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-bot = Bot(token=TOKEN)
-app = Flask(__name__)
+GROUP_ID = os.getenv("GROUP_ID")
+bot = telegram.Bot(token=TOKEN)
 
 @app.route('/')
 def home():
-    return 'Bot está ativo!'
+    return 'Bot DBH - Online ✅'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return "ok"
+    if request.method == 'POST':
+        update = telegram.Update.de_json(request.get_json(force=True), bot)
+        message = update.message
 
-def responder(update, context):
-    mensagem = update.message
-    resposta = processar_mensagem(mensagem)
-    if resposta:
-        context.bot.send_message(chat_id=mensagem.chat_id, text=resposta, parse_mode="Markdown")
+        if message and message.text:
+            texto = message.text.strip().lower()
 
-from telegram.ext import CallbackContext
+            if 'pix' in texto or 'x' in texto:
+                resposta = processar_mensagem(texto)
+            elif texto == "pagamento feito":
+                resposta = marcar_como_pago()
+            elif texto == "listar pendentes":
+                resposta = listar_pendentes()
+            elif texto == "listar pagos":
+                resposta = listar_pagos()
+            elif texto == "ajuda":
+                resposta = mostrar_ajuda()
+            elif texto == "solicitar pagamento":
+                resposta = solicitar_pagamento()
+            elif texto == "total líquido":
+                resposta = total_liquido()
+            elif texto == "total a pagar":
+                resposta = total_bruto()
+            else:
+                resposta = None
 
-dispatcher = Dispatcher(bot, None, use_context=True)
-dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), responder))
+            if resposta:
+                bot.send_message(chat_id=GROUP_ID, text=resposta)
 
-if __name__ == "__main__":
-    app.run()
+        return 'ok', 200
