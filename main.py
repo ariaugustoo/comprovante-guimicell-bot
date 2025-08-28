@@ -1,78 +1,94 @@
 import os
-import logging
 from flask import Flask, request
-import telegram
-from telegram.ext import Dispatcher, MessageHandler, Filters
+from telegram import Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 from processador import (
     processar_mensagem,
-    registrar_pagamento,
-    total_liquido_pendentes,
-    listar_comprovantes_pendentes,
-    listar_comprovantes_pagos,
+    listar_pendentes,
+    listar_pagamentos,
+    total_liquido,
+    total_bruto,
     solicitar_pagamento_manual,
-    limpar_tudo
+    marcar_como_pago
 )
+from telegram import Bot
 
-# Configurações básicas
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROUP_ID = os.environ.get("GROUP_ID")
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 
-bot = telegram.Bot(token=TOKEN)
+bot = Bot(token=TOKEN)
 
 app = Flask(__name__)
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+dispatcher = Dispatcher(bot, None, use_context=True)
 
-# Inicializa o dispatcher para tratar mensagens
-dispatcher = Dispatcher(bot, None, workers=0)
 
-def responder(update, context):
-    texto = update.message.text.strip().lower()
+def start(update, context):
+    update.message.reply_text("Bot ativo e funcionando.")
 
-    if texto == "pagamento feito":
-        resposta = registrar_pagamento()
 
-    elif texto == "total líquido":
-        resposta = total_liquido_pendentes()
+def ajuda(update, context):
+    comandos = """
+Comandos disponíveis:
 
-    elif texto == "total a pagar":
-        resposta = total_liquido_pendentes()
+1. [valor] pix
+2. [valor] [parcelas]x (ex: 5100 10x)
+3. pagamento feito
+4. solicitar pagamento
+5. listar pendentes
+6. listar pagos
+7. total líquido
+8. total a pagar
+"""
+    context.bot.send_message(chat_id=update.effective_chat.id, text=comandos)
 
-    elif texto == "listar pendentes":
-        resposta = listar_comprovantes_pendentes()
 
-    elif texto == "listar pagos":
-        resposta = listar_comprovantes_pagos()
+def handle_message(update, context):
+    texto = update.message.text.lower()
 
+    if "pix" in texto or "x" in texto:
+        resposta = processar_mensagem(texto)
+        if resposta:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "pagamento feito":
+        resposta = marcar_como_pago()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
     elif texto == "solicitar pagamento":
         resposta = solicitar_pagamento_manual()
-
-    elif texto == "limpar tudo" and update.effective_user.id == ADMIN_ID:
-        resposta = limpar_tudo()
-
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "listar pendentes":
+        resposta = listar_pendentes()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "listar pagos":
+        resposta = listar_pagamentos()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "total líquido":
+        resposta = total_liquido()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "total a pagar":
+        resposta = total_bruto()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif texto == "ajuda":
+        ajuda(update, context)
     else:
-        resposta = processar_mensagem(texto)
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Comando não reconhecido. Digite 'ajuda'.")
 
-    context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
 
-# Rota principal
-@app.route("/")
-def index():
-    return "Bot rodando com sucesso!"
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-# Rota do webhook
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), bot)
+    update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return "ok"
+    return "ok", 200
 
-# Registra os handlers
-def registrar_handlers():
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
-registrar_handlers()
+@app.route("/")
+def home():
+    return "Bot de Comprovantes Online", 200
 
-# Executa o app (modo webhook)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
