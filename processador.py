@@ -1,138 +1,126 @@
-import re
 from datetime import datetime
 
 comprovantes = []
 
-# Tabela de taxas de cartão de 1x a 18x
-taxas_cartao = {
-    1: 4.39,
-    2: 5.19,
-    3: 6.19,
-    4: 6.59,
-    5: 7.19,
-    6: 8.29,
-    7: 9.19,
-    8: 9.99,
-    9: 10.29,
-    10: 10.88,
-    11: 11.99,
-    12: 12.52,
-    13: 13.69,
-    14: 14.19,
-    15: 14.69,
-    16: 15.19,
-    17: 15.89,
-    18: 16.84,
+TAXA_PIX = 0.002
+TAXAS_CARTAO = {
+    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719,
+    6: 0.0829, 7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088,
+    11: 0.1199, 12: 0.1252, 13: 0.1369, 14: 0.1419,
+    15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
 }
 
 def normalizar_valor(valor_str):
-    valor_str = valor_str.replace(".", "").replace(",", ".")
+    valor_str = valor_str.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
     try:
         return float(valor_str)
-    except:
+    except ValueError:
         return None
 
-def processar_mensagem(texto):
-    texto = texto.replace("r$", "").strip().lower()
+def calcular_liquido(valor, tipo, parcelas=None):
+    if tipo == "PIX":
+        taxa = TAXA_PIX
+    else:
+        taxa = TAXAS_CARTAO.get(parcelas, 0)
+    liquido = round(valor * (1 - taxa), 2)
+    return liquido, taxa
 
-    match_pix = re.match(r"([\d\.,]+)\s*pix", texto)
-    match_cartao = re.match(r"([\d\.,]+)\s*(\d{1,2})x", texto)
+def registrar_pagamento(valor_str, tipo_pagamento, parcelas=None):
+    valor = normalizar_valor(valor_str)
+    if valor is None:
+        return "❌ Valor inválido. Por favor, envie no formato correto. Ex: 2200 pix ou 3000 6x"
 
-    if match_pix:
-        valor = normalizar_valor(match_pix.group(1))
-        if valor is None:
-            return "Valor inválido."
-        taxa = 0.2
-        desconto = valor * (taxa / 100)
-        valor_liquido = valor - desconto
-        horario = datetime.now().strftime("%H:%M")
-        comprovantes.append({
-            "tipo": "pix",
-            "bruto": valor,
-            "liquido": valor_liquido,
-            "parcelas": 1,
-            "horario": horario,
-            "pago": False
-        })
-        return (
-            f"Comprovante registrado:\n"
-            f"Valor bruto: R$ {valor:,.2f}\n"
-            f"Pagamento: PIX\n"
-            f"Horário: {horario}\n"
-            f"Taxa: {taxa:.1f}%\n"
-            f"Valor líquido: R$ {valor_liquido:,.2f}"
-        )
+    liquido, taxa = calcular_liquido(valor, tipo_pagamento, parcelas)
+    horario = datetime.now().strftime("%H:%M")
+    comprovante = {
+        "valor": valor,
+        "tipo": tipo_pagamento,
+        "parcelas": parcelas,
+        "liquido": liquido,
+        "horario": horario,
+        "pago": False
+    }
+    comprovantes.append(comprovante)
 
-    elif match_cartao:
-        valor = normalizar_valor(match_cartao.group(1))
-        parcelas = int(match_cartao.group(2))
-        if valor is None or parcelas not in taxas_cartao:
-            return "Valor ou número de parcelas inválido."
-        taxa = taxas_cartao[parcelas]
-        desconto = valor * (taxa / 100)
-        valor_liquido = valor - desconto
-        horario = datetime.now().strftime("%H:%M")
-        comprovantes.append({
-            "tipo": "cartao",
-            "bruto": valor,
-            "liquido": valor_liquido,
-            "parcelas": parcelas,
-            "horario": horario,
-            "pago": False
-        })
-        return (
-            f"Comprovante registrado:\n"
-            f"Valor bruto: R$ {valor:,.2f}\n"
-            f"Pagamento: Cartão em {parcelas}x\n"
-            f"Horário: {horario}\n"
-            f"Taxa: {taxa:.2f}%\n"
-            f"Valor líquido: R$ {valor_liquido:,.2f}"
-        )
+    if tipo_pagamento == "PIX":
+        emoji = "💰"
+    else:
+        emoji = "💳"
 
-    return "Formato de mensagem inválido. Use: 2200 pix ou 5100 10x"
+    msg = f"📄 Comprovante registrado:\n"
+    msg += f"💵 Valor bruto: R$ {valor:,.2f}\n"
+    msg += f"{emoji} Pagamento: {tipo_pagamento}"
+    if parcelas:
+        msg += f" em {parcelas}x"
+    msg += f"\n⏰ Horário: {horario}"
+    msg += f"\n📉 Taxa: {taxa * 100:.1f}%"
+    msg += f"\n✅ Valor líquido: R$ {liquido:,.2f}"
 
-def registrar_pagamento():
-    for c in comprovantes:
-        if not c["pago"]:
-            c["pago"] = True
-            return f"Pagamento marcado como feito para: R$ {c['liquido']:,.2f}"
-    return "Nenhum comprovante pendente encontrado."
+    return msg
 
-def total_liquido_pendentes():
-    total = sum(c["liquido"] for c in comprovantes if not c["pago"])
-    return f"Total líquido pendente: R$ {total:,.2f}"
+def marcar_como_pago():
+    for comp in reversed(comprovantes):
+        if not comp["pago"]:
+            comp["pago"] = True
+            return "✅ Último comprovante marcado como pago."
+    return "ℹ️ Nenhum comprovante pendente encontrado."
 
-def listar_comprovantes_pendentes():
+def listar_pendentes():
     pendentes = [c for c in comprovantes if not c["pago"]]
     if not pendentes:
-        return "Nenhum comprovante pendente."
-
-    texto = "Comprovantes pendentes:\n"
-    total = 0
+        return "🟢 Nenhum comprovante pendente."
+    total = sum(c["valor"] for c in pendentes)
+    texto = "📋 Comprovantes pendentes:\n"
     for i, c in enumerate(pendentes, 1):
-        texto += f"{i}. R$ {c['liquido']:,.2f} - {c['tipo']} - {c['parcelas']}x - {c['horario']}\n"
-        total += c["liquido"]
-    texto += f"Total líquido pendente: R$ {total:,.2f}"
+        texto += f"{i}. R$ {c['valor']:,.2f} ({c['tipo']}) - {c['horario']}\n"
+    texto += f"\n💰 Total bruto: R$ {total:,.2f}"
     return texto
 
-def listar_comprovantes_pagos():
+def listar_pagos():
     pagos = [c for c in comprovantes if c["pago"]]
     if not pagos:
-        return "Nenhum comprovante pago."
-
-    texto = "Comprovantes pagos:\n"
-    total = 0
+        return "❌ Nenhum comprovante pago ainda."
+    total = sum(c["valor"] for c in pagos)
+    texto = "✅ Comprovantes pagos:\n"
     for i, c in enumerate(pagos, 1):
-        texto += f"{i}. R$ {c['liquido']:,.2f} - {c['tipo']} - {c['parcelas']}x - {c['horario']}\n"
-        total += c["liquido"]
-    texto += f"Total já pago: R$ {total:,.2f}"
+        texto += f"{i}. R$ {c['valor']:,.2f} ({c['tipo']}) - {c['horario']}\n"
+    texto += f"\n💸 Total bruto pago: R$ {total:,.2f}"
     return texto
 
-def solicitar_pagamento_manual():
-    total = sum(c["liquido"] for c in comprovantes if not c["pago"])
-    return f"Por favor, realize o pagamento do valor líquido pendente: R$ {total:,.2f}"
+def total_liquido():
+    pendentes = [c for c in comprovantes if not c["pago"]]
+    total = sum(c["liquido"] for c in pendentes)
+    return f"💵 Total líquido a repassar: R$ {total:,.2f}"
 
-def limpar_tudo():
-    global comprovantes
-    comprovantes = []
-    return "Todos os comprovantes foram apagados com sucesso."
+def total_a_pagar():
+    pendentes = [c for c in comprovantes if not c["pago"]]
+    total = sum(c["valor"] for c in pendentes)
+    return f"💸 Total bruto pendente: R$ {total:,.2f}"
+
+def ajuda_comandos():
+    return (
+        "📌 *Comandos disponíveis:*\n\n"
+        "💰 Envie o valor + 'pix' → calcula e registra com 0.2% de taxa\n"
+        "💳 Envie valor + parcelas (ex: 3000 6x) → calcula com taxa de cartão\n"
+        "✅ *pagamento feito* → marca o último como pago\n"
+        "📋 *listar pendentes* → lista todos os comprovantes em aberto\n"
+        "✅ *listar pagos* → mostra os já pagos\n"
+        "📉 *total líquido* → valor com desconto da taxa\n"
+        "💸 *total a pagar* → valor bruto pendente\n"
+        "✍️ *solicitar pagamento* → registra um valor pago manualmente"
+    )
+
+def solicitar_pagamento(valor_str):
+    valor = normalizar_valor(valor_str)
+    if valor is None:
+        return "❌ Valor inválido. Ex: 1000,00"
+    comprovante = {
+        "valor": valor,
+        "tipo": "MANUAL",
+        "parcelas": None,
+        "liquido": valor,
+        "horario": datetime.now().strftime("%H:%M"),
+        "pago": True
+    }
+    comprovantes.append(comprovante)
+    return f"📝 Pagamento de R$ {valor:,.2f} registrado manualmente como pago."
