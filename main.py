@@ -11,66 +11,43 @@ from processador import (
     registrar_pagamento_solicitado
 )
 
-# Carrega variáveis do ambiente
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROUP_ID = int(os.environ.get("GROUP_ID"))
-ADMIN_ID = int(os.environ.get("ADMIN_ID"))
-
-# Inicializa bot e dispatcher
-bot = Bot(token=TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot, None, use_context=True)
 
-# Comandos
-def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Bot de comprovantes ativado ✅")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+bot = Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-def comando_pagamento_feito(update, context):
-    if update.effective_chat.id != GROUP_ID:
-        return
-    usuario_id = update.effective_user.id
-    marcar_como_pago(usuario_id)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-def comando_quanto_devo(update, context):
-    if update.effective_chat.id != GROUP_ID:
-        return
-    quanto_devo()
+def responder(update, context):
+    mensagem = update.message.text.lower()
 
-def comando_total_a_pagar(update, context):
-    if update.effective_chat.id != GROUP_ID:
-        return
-    total_a_pagar()
+    if mensagem == "pagamento feito":
+        resposta = marcar_como_pago(update.effective_user.id)
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif mensagem == "quanto devo":
+        resposta = f"💰 Devo ao lojista: R$ {quanto_devo():,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif mensagem == "total a pagar":
+        resposta = f"💰 Total bruto pendente: R$ {total_a_pagar():,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    elif mensagem == "solicitar pagamento":
+        iniciar_solicitacao_pagamento(update.effective_user.id)
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor a ser solicitado (ex: 300,00):")
+    elif mensagem.replace(",", ".").replace(".", "").isdigit():  # Captura valor digitado
+        resposta = registrar_pagamento_solicitado(update.effective_user.id, mensagem)
+        if resposta:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+        else:
+            processar_mensagem(update)
+    else:
+        processar_mensagem(update)
 
-def comando_solicitar_pagamento(update, context):
-    if update.effective_chat.id != GROUP_ID:
-        return
-    iniciar_solicitacao_pagamento(update.effective_user.id)
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
-def mensagem(update, context):
-    if update.effective_chat.id != GROUP_ID:
-        return
-    processar_mensagem(update)
-
-# Registrar comandos e mensagens
-def registrar_handlers():
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^pagamento feito$"), comando_pagamento_feito))
-    dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^quanto devo$"), comando_quanto_devo))
-    dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^total a pagar$"), comando_total_a_pagar))
-    dispatcher.add_handler(MessageHandler(Filters.regex("(?i)^solicitar pagamento$"), comando_solicitar_pagamento))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, mensagem))
-
-registrar_handlers()
-
-# Rota do webhook
-@app.route('/webhook', methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
     return "ok"
-
-# Iniciar app com host 0.0.0.0 e porta correta
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
