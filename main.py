@@ -1,99 +1,78 @@
 import os
-import re
+import logging
 from flask import Flask, request
-from telegram import Bot
-from telegram.utils.request import Request
+import telegram
+from telegram.ext import Dispatcher, MessageHandler, Filters
 from processador import (
     processar_mensagem,
     registrar_pagamento,
     total_liquido_pendentes,
-    solicitar_pagamento_manual,
     listar_comprovantes_pendentes,
-    listar_comprovantes_pagos
+    listar_comprovantes_pagos,
+    solicitar_pagamento_manual,
+    limpar_tudo
 )
 
-# Variáveis de ambiente
+# Configurações básicas
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+GROUP_ID = os.getenv("GROUP_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# Inicialização do bot e Flask
+bot = telegram.Bot(token=TOKEN)
+
 app = Flask(__name__)
-bot = Bot(token=TOKEN, request=Request(con_pool_size=8))
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-@app.route('/')
-def home():
-    return 'Bot de comprovantes está ativo!'
+# Inicializa o dispatcher para tratar mensagens
+dispatcher = Dispatcher(bot, None, workers=0)
 
-@app.route('/webhook', methods=['POST'])
+def responder(update, context):
+    texto = update.message.text.strip().lower()
+
+    if texto == "pagamento feito":
+        resposta = registrar_pagamento()
+
+    elif texto == "total líquido":
+        resposta = total_liquido_pendentes()
+
+    elif texto == "total a pagar":
+        resposta = total_liquido_pendentes()
+
+    elif texto == "listar pendentes":
+        resposta = listar_comprovantes_pendentes()
+
+    elif texto == "listar pagos":
+        resposta = listar_comprovantes_pagos()
+
+    elif texto == "solicitar pagamento":
+        resposta = solicitar_pagamento_manual()
+
+    elif texto == "limpar tudo" and update.effective_user.id == ADMIN_ID:
+        resposta = limpar_tudo()
+
+    else:
+        resposta = processar_mensagem(texto)
+
+    context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+
+# Rota principal
+@app.route("/")
+def index():
+    return "Bot rodando com sucesso!"
+
+# Rota do webhook
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    if request.method == "POST":
-        update = request.get_json()
+    update = telegram.Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "ok"
 
-        try:
-            message = update.get("message", {})
-            text = message.get("text", "")
-            user_id = message.get("from", {}).get("id")
-            username = message.get("from", {}).get("username", "usuário")
+# Registra os handlers
+def registrar_handlers():
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
-            print(f"Mensagem recebida de @{username} ({user_id}): {text}")
+registrar_handlers()
 
-            if not text:
-                return 'OK'
-
-            text = text.strip().lower()
-
-            if "pix" in text or "x" in text:
-                resposta = processar_mensagem(text)
-                if resposta:
-                    bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "pagamento feito":
-                resposta = registrar_pagamento()
-                bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "total líquido":
-                resposta = total_liquido_pendentes()
-                bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "solicitar pagamento":
-                resposta = solicitar_pagamento_manual()
-                bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "listar pendentes":
-                resposta = listar_comprovantes_pendentes()
-                bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "listar pagos":
-                resposta = listar_comprovantes_pagos()
-                bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='HTML')
-
-            elif text == "ajuda":
-                ajuda_texto = (
-                    "*Comandos disponíveis:*\n\n"
-                    "1. 2200 pix\n"
-                    "2. 5100 10x\n"
-                    "3. Pagamento feito\n"
-                    "4. Solicitar pagamento\n"
-                    "5. Total líquido\n"
-                    "6. Listar pendentes\n"
-                    "7. Listar pagos\n\n"
-                    "*O bot responde automaticamente com o valor líquido já calculado.*"
-                )
-                bot.send_message(chat_id=GROUP_ID, text=ajuda_texto, parse_mode="Markdown")
-
-            elif text == "/limpar tudo":
-                if user_id == ADMIN_ID:
-                    from processador import limpar_tudo
-                    resposta = limpar_tudo()
-                    bot.send_message(chat_id=GROUP_ID, text=resposta)
-                else:
-                    bot.send_message(chat_id=GROUP_ID, text="Comando restrito ao administrador.")
-
-            else:
-                print("Mensagem ignorada:", text)
-
-        except Exception as e:
-            print("ERRO no webhook:", str(e))
-
-    return 'OK'
+# Executa o app (modo webhook)
+if __name__ == "__main__":
+    app.run(port=10000, debug=True)
