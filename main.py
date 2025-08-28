@@ -15,7 +15,7 @@ app = Flask(__name__)
 def home():
     return "Bot está rodando com sucesso!"
 
-@app.route(f"/webhook", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
 
@@ -25,11 +25,12 @@ def webhook():
         message_text = data["message"].get("text", "").strip()
 
         if message_text:
-            if message_text.lower() == "pagamento feito":
+            texto = message_text.lower()
+            if texto == "pagamento feito":
                 return marcar_como_pago(chat_id)
-            elif message_text.lower() == "total líquido":
+            elif texto == "total líquido":
                 return comando_total_liquido(chat_id)
-            elif message_text.lower() == "total a pagar":
+            elif texto == "total a pagar":
                 return comando_total_bruto(chat_id)
             else:
                 return processar_mensagem(chat_id, message_text)
