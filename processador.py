@@ -1,99 +1,136 @@
-import re
-
 comprovantes = []
 
-TAXA_PIX = 0.002
-TAXAS_CARTAO = {
-    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719,
-    6: 0.0829, 7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088,
-    11: 0.1199, 12: 0.1252, 13: 0.1369, 14: 0.1419, 15: 0.1469,
-    16: 0.1519, 17: 0.1589, 18: 0.1684
-}
+def normalizar_valor(valor_str):
+    try:
+        valor_str = valor_str.replace("R$", "").replace(",", ".").replace(" ", "")
+        valor_str = ''.join(c for c in valor_str if c.isdigit() or c == '.')
+        return round(float(valor_str), 2)
+    except:
+        return None
 
-def normalizar_valor(valor):
-    valor = valor.replace('.', '').replace(',', '.')
-    return float(re.findall(r'\d+\.\d+|\d+', valor)[0])
-
-def processar_mensagem(mensagem):
-    valor = normalizar_valor(mensagem)
+def extrair_info_pagamento(mensagem):
+    mensagem = mensagem.lower()
     if "pix" in mensagem:
-        taxa = TAXA_PIX
-        tipo = "PIX"
+        tipo = "pix"
+        valor = normalizar_valor(mensagem)
         parcelas = None
+    elif "x" in mensagem:
+        tipo = "cartao"
+        partes = mensagem.split("x")
+        valor = normalizar_valor(partes[0])
+        try:
+            parcelas = int(partes[1].strip())
+        except:
+            parcelas = 1
     else:
-        parcelas = int(re.search(r'(\d{1,2})x', mensagem).group(1))
-        taxa = TAXAS_CARTAO.get(parcelas, 0)
-        tipo = f"Cartão {parcelas}x"
+        tipo = None
+        valor = normalizar_valor(mensagem)
+        parcelas = None
 
-    valor_liquido = round(valor * (1 - taxa), 2)
+    return valor, tipo, parcelas
+
+def calcular_taxa(tipo, parcelas):
+    if tipo == "pix":
+        return 0.002
+    elif tipo == "cartao":
+        taxas_cartao = {
+            1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719,
+            6: 0.0829, 7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088,
+            11: 0.1199, 12: 0.1252, 13: 0.1369, 14: 0.1419, 15: 0.1469,
+            16: 0.1519, 17: 0.1589, 18: 0.1684
+        }
+        return taxas_cartao.get(parcelas, 0)
+    else:
+        return 0
+
+def calcular_valor_liquido(valor, taxa):
+    if valor is None:
+        return 0.0
+    return round(valor * (1 - taxa), 2)
+
+def processar_mensagem(texto):
+    global comprovantes
+    valor, tipo, parcelas = extrair_info_pagamento(texto)
+    if valor is None or tipo is None:
+        return "❌ Não consegui entender o comprovante. Envie no formato:\n\n👉 `1000 pix` ou `2500 6x`"
+
+    taxa = calcular_taxa(tipo, parcelas)
+    valor_liquido = calcular_valor_liquido(valor, taxa)
 
     comprovantes.append({
-        "valor": valor,
+        "valor_bruto": valor,
+        "tipo": tipo,
         "parcelas": parcelas,
         "taxa": taxa,
-        "liquido": valor_liquido,
+        "valor_liquido": valor_liquido,
         "pago": False
     })
 
-    return (
-        f"📄 *Comprovante analisado:*\n"
+    msg = (
+        "📄 *Comprovante analisado:*\n"
         f"💰 Valor bruto: R$ {valor:,.2f}\n"
-        f"💳 Tipo: {tipo}\n"
-        f"📉 Taxa aplicada: {taxa * 100:.2f}%\n"
+        f"💳 Tipo: {'PIX' if tipo == 'pix' else f'{parcelas}x'}\n"
+        f"📉 Taxa aplicada: {taxa*100:.2f}%\n"
         f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
     )
+    return msg
 
 def marcar_como_pago():
-    for comp in reversed(comprovantes):
-        if not comp["pago"]:
-            comp["pago"] = True
-            return "✅ Último comprovante marcado como *pago*."
-    return "Nenhum comprovante pendente encontrado."
+    for c in comprovantes:
+        if not c["pago"]:
+            c["pago"] = True
+            return "✅ Último comprovante marcado como pago."
+    return "⚠️ Nenhum comprovante pendente encontrado."
+
+def comando_total_liquido():
+    total = sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
+    return f"💰 *Total líquido a pagar:* R$ {total:,.2f}"
+
+def comando_total_bruto():
+    total = sum(c["valor_bruto"] for c in comprovantes if not c["pago"])
+    return f"📊 *Total bruto (sem desconto):* R$ {total:,.2f}"
 
 def listar_pendentes():
     pendentes = [c for c in comprovantes if not c["pago"]]
     if not pendentes:
         return "✅ Nenhum comprovante pendente."
-    texto = "📌 *Comprovantes Pendentes:*\n"
-    total = 0
-    for i, c in enumerate(pendentes, 1):
-        texto += f"{i}. R$ {c['valor']:.2f} ({'PIX' if c['parcelas'] is None else f'{c['parcelas']}x'})\n"
-        total += c["valor"]
-    texto += f"\n💰 *Total bruto pendente:* R$ {total:.2f}"
-    return texto
+
+    linhas = []
+    for c in pendentes:
+        linha = f"📄 {c['valor_bruto']:,.2f} | {'PIX' if c['parcelas'] is None else f\"{c['parcelas']}x\"} | R$ {c['valor_liquido']:,.2f}"
+        linhas.append(linha)
+
+    total = sum(c["valor_liquido"] for c in pendentes)
+    return "*🧾 Comprovantes Pendentes:*\n" + "\n".join(linhas) + f"\n\n💰 *Total líquido:* R$ {total:,.2f}"
 
 def listar_pagos():
     pagos = [c for c in comprovantes if c["pago"]]
     if not pagos:
-        return "📭 Nenhum comprovante foi pago ainda."
-    texto = "📬 *Comprovantes Pagos:*\n"
-    total = 0
-    for i, c in enumerate(pagos, 1):
-        texto += f"{i}. R$ {c['valor']:.2f} ({'PIX' if c['parcelas'] is None else f'{c['parcelas']}x'})\n"
-        total += c["valor"]
-    texto += f"\n✅ *Total pago:* R$ {total:.2f}"
-    return texto
+        return "⚠️ Nenhum comprovante marcado como pago ainda."
 
-def mostrar_ajuda():
-    return (
-        "📌 *Comandos disponíveis:*\n\n"
-        "• `1000 pix` → calcula valor líquido com taxa de PIX\n"
-        "• `3000 6x` → calcula valor líquido com taxa de cartão\n"
-        "• `pagamento feito` → marca último comprovante como pago\n"
-        "• `listar pendentes` → lista todos os pendentes\n"
-        "• `listar pagos` → lista os pagos\n"
-        "• `total líquido` → soma líquida dos pendentes\n"
-        "• `total a pagar` → soma bruta dos pendentes\n"
-        "• `solicitar pagamento` → digite valor manual para registrar"
-    )
+    linhas = []
+    for c in pagos:
+        linha = f"✅ {c['valor_bruto']:,.2f} | {'PIX' if c['parcelas'] is None else f\"{c['parcelas']}x\"} | R$ {c['valor_liquido']:,.2f}"
+        linhas.append(linha)
 
-def solicitar_pagamento():
-    return "Digite o valor do pagamento (ex: `2500 pix` ou `3000 3x`) para registrar manualmente."
+    total = sum(c["valor_liquido"] for c in pagos)
+    return "*✅ Comprovantes Pagos:*\n" + "\n".join(linhas) + f"\n\n💰 *Total pago:* R$ {total:,.2f}"
 
-def total_liquido():
-    total = sum(c["liquido"] for c in comprovantes if not c["pago"])
-    return f"💰 *Total líquido a pagar:* R$ {total:.2f}"
+def solicitar_pagamento_manual(valor_manual):
+    try:
+        valor = normalizar_valor(valor_manual)
+        if valor is None:
+            return "❌ Valor inválido. Envie no formato: `1234,56` ou `1234.56`"
 
-def total_bruto():
-    total = sum(c["valor"] for c in comprovantes if not c["pago"])
-    return f"💵 *Total bruto a pagar:* R$ {total:.2f}"
+        comprovantes.append({
+            "valor_bruto": valor,
+            "tipo": "manual",
+            "parcelas": None,
+            "taxa": 0.0,
+            "valor_liquido": valor,
+            "pago": True
+        })
+
+        return f"✅ Valor manual de R$ {valor:,.2f} registrado como *pago*."
+    except:
+        return "❌ Erro ao processar valor manual."
