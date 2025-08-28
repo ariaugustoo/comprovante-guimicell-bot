@@ -1,53 +1,82 @@
-import os
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+import os
+from dotenv import load_dotenv
 from processador import (
     processar_mensagem,
     marcar_como_pago,
-    quanto_devo,
-    total_a_pagar,
-    iniciar_solicitacao_pagamento,
+    total_pendentes,
+    total_bruto,
     registrar_pagamento_solicitado
 )
 
-app = Flask(__name__)
+load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+app = Flask(__name__)
 bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
 
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# Dispatcher com suporte a webhooks
+dispatcher = Dispatcher(bot, None, workers=1)
 
-def responder(update, context):
-    mensagem = update.message.text.lower()
+# HANDLERS
+def start(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Bot ativo!")
 
-    if mensagem == "pagamento feito":
-        resposta = marcar_como_pago(update.effective_user.id)
+def ajuda(update, context):
+    comandos = (
+        "📋 Comandos disponíveis:\n"
+        "- Enviar valor + pix (ex: 1234,56 pix)\n"
+        "- Enviar valor + parcelas (ex: 2000 6x)\n"
+        "- pagamento feito ✅\n"
+        "- quanto devo (valor líquido com taxas)\n"
+        "- total a pagar (valor bruto)\n"
+        "- solicitar pagamento"
+    )
+    context.bot.send_message(chat_id=update.effective_chat.id, text=comandos)
+
+def solicitar_pagamento(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor a solicitar:")
+    return
+
+def mensagem(update, context):
+    texto = update.message.text.lower()
+    if texto == "pagamento feito" and update.effective_user.id == ADMIN_ID:
+        resposta = marcar_como_pago()
         context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
-    elif mensagem == "quanto devo":
-        resposta = f"💰 Devo ao lojista: R$ {quanto_devo():,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
-    elif mensagem == "total a pagar":
-        resposta = f"💰 Total bruto pendente: R$ {total_a_pagar():,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
-    elif mensagem == "solicitar pagamento":
-        iniciar_solicitacao_pagamento(update.effective_user.id)
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor a ser solicitado (ex: 300,00):")
-    elif mensagem.replace(",", ".").replace(".", "").isdigit():  # Captura valor digitado
-        resposta = registrar_pagamento_solicitado(update.effective_user.id, mensagem)
+    elif "solicitar pagamento" in texto:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor e chave pix:")
+    elif "quanto devo" in texto:
+        valor = total_pendentes()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Devo ao lojista: R$ {valor:.2f}")
+    elif "total a pagar" in texto:
+        valor = total_bruto()
+        context.bot.send_message(chat_id=update.effective_chat.id, text=f"📦 Valor bruto total pendente: R$ {valor:.2f}")
+    else:
+        resposta = processar_mensagem(texto)
         if resposta:
             context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
-        else:
-            processar_mensagem(update)
-    else:
-        processar_mensagem(update)
 
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
+# REGISTRO DOS HANDLERS
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("ajuda", ajuda))
+dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), mensagem))
 
-@app.route('/webhook', methods=['POST'])
+# FLASK ROUTES
+@app.route('/')
+def index():
+    return "Bot do Comprovante está ativo!"
+
+@app.route('/webhook', methods=["POST"])
 def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-    return "ok"
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return 'OK'
+
+# INICIALIZAÇÃO DO WEBHOOK
+if __name__ == '__main__':
+    app.run(debug=False)
