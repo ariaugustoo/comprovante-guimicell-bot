@@ -1,122 +1,74 @@
-import datetime
-from telegram import Update
-from telegram.ext import CallbackContext
+from datetime import datetime
+import re
 
 comprovantes = []
+solicitacoes_pagamento = []
 
 taxas_cartao = {
-    i: t for i, t in zip(
-        range(1, 19),
-        [4.39, 5.19, 6.19, 6.59, 7.19, 8.29, 9.19, 9.99, 10.29,
-         10.88, 11.99, 12.52, 13.69, 14.19, 14.69, 15.19, 15.89, 16.84]
-    )
+    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
+    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
+    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
 }
 
-def normalizar_valor(texto):
-    texto = texto.lower().replace("r$", "").replace(" ", "").replace(",", ".")
+def parse_valor(texto):
     try:
-        return float(texto)
-    except ValueError:
+        texto = texto.replace(".", "").replace(",", ".")
+        return float(re.findall(r'\d+\.?\d*', texto)[0])
+    except:
         return None
 
-def processar_mensagem(update: Update, context: CallbackContext):
-    texto = update.message.text.lower()
-    horario = datetime.datetime.now().strftime('%H:%M')
-
+def processar_mensagem(texto):
+    texto = texto.lower()
+    valor = parse_valor(texto)
+    parcelas = None
+    taxa = 0
+    tipo = ""
+    
     if "pix" in texto:
-        valor = normalizar_valor(texto.replace("pix", ""))
-        if valor:
-            taxa = 0.2
-            valor_liquido = valor * (1 - taxa / 100)
-            comprovantes.append({
-                "valor_bruto": valor,
-                "valor_liquido": valor_liquido,
-                "pago": False,
-                "tipo": "PIX",
-                "horario": horario
-            })
-            msg = (
-                f"📄 Comprovante analisado:\n"
-                f"💰 Valor bruto: R$ {valor:,.2f}\n"
-                f"💰 Tipo: PIX\n"
-                f"⏰ Horário: {horario}\n"
-                f"📉 Taxa aplicada: {taxa:.2f}%\n"
-                f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
-            )
-            context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-        return
+        taxa = 0.2
+        tipo = "PIX"
+    elif "x" in texto:
+        match = re.search(r'(\d{1,2})x', texto)
+        if match:
+            parcelas = int(match.group(1))
+            taxa = taxas_cartao.get(parcelas, 0)
+            tipo = f"Cartão {parcelas}x"
+    
+    if valor is None or taxa == 0 and not tipo:
+        return "❌ Não entendi o comprovante. Envie no formato: `1000 pix` ou `1500 3x`."
 
-    if "x" in texto:
-        partes = texto.split()
-        valor = normalizar_valor(partes[0])
-        try:
-            parcelas = int(partes[1].replace("x", ""))
-            taxa = taxas_cartao.get(parcelas)
-            if valor and taxa:
-                valor_liquido = valor * (1 - taxa / 100)
-                comprovantes.append({
-                    "valor_bruto": valor,
-                    "valor_liquido": valor_liquido,
-                    "pago": False,
-                    "tipo": f"Cartão {parcelas}x",
-                    "horario": horario
-                })
-                msg = (
-                    f"📄 Comprovante analisado:\n"
-                    f"💰 Valor bruto: R$ {valor:,.2f}\n"
-                    f"💰 Tipo: Cartão {parcelas}x\n"
-                    f"⏰ Horário: {horario}\n"
-                    f"📉 Taxa aplicada: {taxa:.2f}%\n"
-                    f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
-                )
-                context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-        except:
-            pass
-        return
+    valor_liquido = round(valor * (1 - taxa / 100), 2)
+    hora = datetime.now().strftime("%H:%M")
 
-def marcar_como_pago(update: Update, context: CallbackContext):
-    for comp in reversed(comprovantes):
-        if not comp["pago"]:
-            comp["pago"] = True
-            context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Último comprovante marcado como pago.")
-            return
-    context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Nenhum comprovante pendente encontrado.")
+    comprovantes.append({
+        "valor_bruto": valor,
+        "valor_liquido": valor_liquido,
+        "parcelas": parcelas,
+        "tipo": tipo,
+        "horario": hora,
+        "pago": False
+    })
 
-def listar_pendentes(update: Update, context: CallbackContext):
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    if not pendentes:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Nenhum pagamento pendente.")
-        return
-    total = sum(c["valor_liquido"] for c in pendentes)
-    linhas = [f"R$ {c['valor_liquido']:,.2f} - {c['tipo']}" for c in pendentes]
-    resposta = "📌 Pendentes:\n" + "\n".join(linhas) + f"\n\n💰 Total líquido: R$ {total:,.2f}"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+    return (
+        f"📄 Comprovante analisado:\n"
+        f"💰 Valor bruto: R$ {valor:,.2f}\n"
+        f"💰 Tipo: {tipo}\n"
+        f"⏰ Horário: {hora}\n"
+        f"📉 Taxa aplicada: {taxa}%\n"
+        f"✅ Valor líquido a pagar: R$ {valor_liquido:,.2f}"
+    )
 
-def listar_pagamentos(update: Update, context: CallbackContext):
-    pagos = [c for c in comprovantes if c["pago"]]
-    if not pagos:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="ℹ️ Nenhum pagamento feito ainda.")
-        return
-    total = sum(c["valor_liquido"] for c in pagos)
-    linhas = [f"R$ {c['valor_liquido']:,.2f} - {c['tipo']}" for c in pagos]
-    resposta = "✅ Pagos:\n" + "\n".join(linhas) + f"\n\n💰 Total pago: R$ {total:,.2f}"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+def marcar_como_pago():
+    for c in comprovantes:
+        if not c["pago"]:
+            c["pago"] = True
+            return f"✅ Comprovante de R$ {c['valor_liquido']:,.2f} marcado como pago."
+    return "ℹ️ Nenhum comprovante pendente para marcar como pago."
 
-def solicitar_pagamento(update: Update, context: CallbackContext):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Digite o valor e a chave Pix para solicitar pagamento.")
-
-def total_pendentes(update: Update, context: CallbackContext):
+def quanto_devo():
     total = sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
-    context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Devo ao lojista: R$ {total:,.2f}")
+    return f"💰 Devo ao lojista: R$ {total:,.2f}"
 
-def total_a_pagar(update: Update, context: CallbackContext):
+def total_a_pagar():
     total = sum(c["valor_bruto"] for c in comprovantes if not c["pago"])
-    context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Total bruto dos comprovantes: R$ {total:,.2f}")
-
-def enviar_resumo_automatico(bot, group_id):
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    if not pendentes:
-        return
-    total = sum(c["valor_liquido"] for c in pendentes)
-    msg = f"📢 Resumo automático:\n💰 Valor total líquido pendente: R$ {total:,.2f}"
-    bot.send_message(chat_id=group_id, text=msg)
+    return f"💰 Total a pagar (sem desconto): R$ {total:,.2f}"
