@@ -81,7 +81,7 @@ def processar_mensagem(chat_id, texto):
             enviar_mensagem(chat_id, resposta)
             return "OK", 200
 
-        except Exception as e:
+        except Exception:
             enviar_mensagem(chat_id, "❌ Erro ao processar PIX. Verifique o valor.")
             return "OK", 200
 
@@ -123,7 +123,7 @@ def processar_mensagem(chat_id, texto):
             enviar_mensagem(chat_id, resposta)
             return "OK", 200
 
-        except Exception as e:
+        except Exception:
             enviar_mensagem(chat_id, "❌ Erro ao processar cartão. Verifique o valor e parcelas.")
             return "OK", 200
 
