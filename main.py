@@ -1,6 +1,8 @@
 import os
 from flask import Flask, request
-from processador import processar_mensagem, comando_total_liquido, comando_total_bruto, marcar_como_pago
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, Filters
+from processador import processar_mensagem
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,34 +11,30 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
+bot = Bot(token=TOKEN)
 app = Flask(__name__)
 
-@app.route("/")
+@app.route('/')
 def home():
-    return "Bot está rodando com sucesso!"
+    return 'Bot está ativo!'
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.get_json()
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return "ok"
 
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        user_id = data["message"]["from"]["id"]
-        message_text = data["message"].get("text", "").strip()
+def responder(update, context):
+    mensagem = update.message
+    resposta = processar_mensagem(mensagem)
+    if resposta:
+        context.bot.send_message(chat_id=mensagem.chat_id, text=resposta, parse_mode="Markdown")
 
-        if message_text:
-            texto = message_text.lower()
-            if texto == "pagamento feito":
-                return marcar_como_pago(chat_id)
-            elif texto == "total líquido":
-                return comando_total_liquido(chat_id)
-            elif texto == "total a pagar":
-                return comando_total_bruto(chat_id)
-            else:
-                return processar_mensagem(chat_id, message_text)
+from telegram.ext import CallbackContext
 
-    return "OK", 200
+dispatcher = Dispatcher(bot, None, use_context=True)
+dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), responder))
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app.run()
