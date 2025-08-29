@@ -2,69 +2,60 @@ import os
 import logging
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
-from apscheduler.schedulers.background import BackgroundScheduler
-from dotenv import load_dotenv
-from processador import (
-    processar_mensagem,
-    comando_pagamento_feito,
-    comando_quanto_devo,
-    comando_total_a_pagar,
-    comando_listar_pendentes,
-    comando_listar_pagos,
-    comando_solicitar_pagamento,
-    comando_ajuda,
-    comando_limpar_tudo,
-    comando_corrigir_valor
-)
+from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
+from processador import processar_mensagem, listar_pendentes, listar_pagamentos_feitos, solicitar_pagamento, limpar_tudo, corrigir_valor
 
-# Carregar variáveis de ambiente
-load_dotenv()
+# Configurações iniciais
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Configurar logging
+bot = Bot(token=TOKEN)
+
+# Inicializa o Flask
+app = Flask(__name__)
+
+# Dispatcher do Telegram
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+
+# Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Inicializar Flask e Bot
-app = Flask(__name__)
-bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
-
-# Comandos do bot
-dispatcher.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text("🤖 Bot ativo!")))
-dispatcher.add_handler(CommandHandler("ajuda", comando_ajuda))
-dispatcher.add_handler(CommandHandler("quanto_devo", comando_quanto_devo))
-dispatcher.add_handler(CommandHandler("total_a_pagar", comando_total_a_pagar))
-dispatcher.add_handler(CommandHandler("listar_pendentes", comando_listar_pendentes))
-dispatcher.add_handler(CommandHandler("listar_pagos", comando_listar_pagos))
-dispatcher.add_handler(CommandHandler("solicitar_pagamento", comando_solicitar_pagamento))
-dispatcher.add_handler(CommandHandler("pagamento_feito", comando_pagamento_feito))
-
-# Comandos de admin
-dispatcher.add_handler(CommandHandler("limpar_tudo", comando_limpar_tudo, filters=Filters.user(user_id=ADMIN_ID)))
-dispatcher.add_handler(CommandHandler("corrigir_valor", comando_corrigir_valor, filters=Filters.user(user_id=ADMIN_ID)))
-
-# Qualquer outra mensagem
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
-
-# Webhook do Render
-@app.route(f"/webhook", methods=["POST"])
+# Webhook para receber atualizações
+@app.route('/webhook', methods=['POST'])
 def webhook():
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
     return "ok"
 
-# Agendador (opcional)
-def tarefa_repetitiva():
-    bot.send_message(chat_id=GROUP_ID, text="⏰ Rodando tarefa agendada.")
+# Manipuladores de comando
+def ajuda(update, context):
+    comandos = """
+📋 *Comandos disponíveis:*
+• Enviar valor com "pix" ou "parcelas" (ex: 1234,56 pix ou 1999,99 6x)
+• pagamento feito – marca o último como pago ou abate parcial
+• quanto devo – valor líquido a pagar com taxas
+• total a pagar – valor bruto pendente
+• listar pendentes – lista os comprovantes abertos
+• listar pagos – lista os comprovantes quitados
+• solicitar pagamento – lojista solicita valor + chave Pix
+• limpar tudo – ⚠️ Admin zera todos os dados
+• corrigir valor – ⚠️ Admin ajusta valor do último comprovante
+"""
+    update.message.reply_text(comandos, parse_mode="Markdown")
 
-scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
-# scheduler.add_job(tarefa_repetitiva, 'interval', hours=1)  # Exemplo de tarefa
-scheduler.start()
+def registrar_handlers():
+    dispatcher.add_handler(CommandHandler("ajuda", ajuda))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^ajuda$'), ajuda))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^listar pendentes$'), listar_pendentes))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^listar pagos$'), listar_pagamentos_feitos))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^solicitar pagamento$'), solicitar_pagamento))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^limpar tudo$'), limpar_tudo))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'(?i)^corrigir valor$'), corrigir_valor))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
 
-# Iniciar servidor no Render
-if __name__ == "__main__":
+registrar_handlers()
+
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
