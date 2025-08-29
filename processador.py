@@ -176,7 +176,7 @@ def total_pendente_liquido():
 
 def total_bruto_pendente():
     return sum(c["valor"] for c in comprovantes if not c["pago"])
-    def marcar_como_pago(message):
+def marcar_como_pago(message):
     for c in comprovantes:
         if not c["pago"]:
             c["pago"] = True
