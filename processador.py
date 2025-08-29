@@ -1,176 +1,106 @@
+import re
 from datetime import datetime, timedelta
 import pytz
 
+# Dicionário para armazenar os comprovantes
 comprovantes = []
-pagamentos_feitos = []
+solicitacoes_pagamento = []
 
+# Tabela de taxas por parcela
 taxas_cartao = {
-    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659, 5: 0.0719, 6: 0.0829,
-    7: 0.0919, 8: 0.0999, 9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
-    13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519, 17: 0.1589, 18: 0.1684
+    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
+    6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
+    11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19,
+    15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
 }
 
-def formatar_valor(valor):
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+# Função para processar mensagens recebidas
+def processar_mensagem(texto, horario_brasilia):
+    texto = texto.lower().replace(",", ".")
+    padrao_pix = re.search(r"([\d.]+)\s*pix", texto)
+    padrao_cartao = re.search(r"([\d.]+)\s*(\d{1,2})x", texto)
 
-def formatar_horario():
-    fuso = pytz.timezone("America/Sao_Paulo")
-    return datetime.now(fuso).strftime("%H:%M")
-
-def parse_valor(valor_str):
-    try:
-        valor = valor_str.replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
-        return float(valor)
-    except:
-        return None
-
-def processar_mensagem(update, context=None):
-    texto = update.message.text.lower()
-    valor = parse_valor(texto)
-
-    if not valor:
-        return
-
-    if "pix" in texto:
-        taxa = 0.002
-        liquido = round(valor * (1 - taxa), 2)
+    if padrao_pix:
+        valor = float(padrao_pix.group(1))
+        taxa = 0.2
+        liquido = valor * (1 - taxa / 100)
         comprovantes.append({
             "valor_bruto": valor,
-            "parcelas": "PIX",
-            "taxa": taxa,
             "valor_liquido": liquido,
-            "hora": formatar_horario(),
+            "horario": horario_brasilia.strftime("%H:%M"),
+            "tipo": "PIX",
+            "taxa": taxa,
             "pago": False
         })
-        mensagem = f"""📄 Comprovante analisado:
-💰 Valor bruto: {formatar_valor(valor)}
-💰 Tipo: PIX
-⏰ Horário: {formatar_horario()}
-📉 Taxa aplicada: {taxa*100:.2f}%
-✅ Valor líquido a pagar: {formatar_valor(liquido)}"""
-        update.message.reply_text(mensagem)
+        return (f"📄 Comprovante analisado:\n"
+                f"💰 Valor bruto: R$ {valor:,.2f}\n"
+                f"💰 Tipo: PIX\n"
+                f"⏰ Horário: {horario_brasilia.strftime('%H:%M')}\n"
+                f"📉 Taxa aplicada: {taxa}%\n"
+                f"✅ Valor líquido a pagar: R$ {liquido:,.2f}")
 
-    elif "x" in texto:
-        try:
-            partes = texto.split("x")
-            valor_total = parse_valor(partes[0])
-            parcelas = int(partes[1].strip())
+    elif padrao_cartao:
+        valor = float(padrao_cartao.group(1))
+        parcelas = int(padrao_cartao.group(2))
+        taxa = taxas_cartao.get(parcelas, 0)
+        liquido = valor * (1 - taxa / 100)
+        comprovantes.append({
+            "valor_bruto": valor,
+            "valor_liquido": liquido,
+            "horario": horario_brasilia.strftime("%H:%M"),
+            "tipo": f"{parcelas}x",
+            "taxa": taxa,
+            "pago": False
+        })
+        return (f"📄 Comprovante analisado:\n"
+                f"💰 Valor bruto: R$ {valor:,.2f}\n"
+                f"💰 Tipo: Cartão ({parcelas}x)\n"
+                f"⏰ Horário: {horario_brasilia.strftime('%H:%M')}\n"
+                f"📉 Taxa aplicada: {taxa}%\n"
+                f"✅ Valor líquido a pagar: R$ {liquido:,.2f}")
+    
+    return None
 
-            if parcelas not in taxas_cartao:
-                update.message.reply_text("❌ Número de parcelas inválido. Use de 1x até 18x.")
-                return
+def calcular_total_liquido_pendente():
+    total = sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
+    return f"💰 Devo ao lojista: R$ {total:,.2f}"
 
-            taxa = taxas_cartao[parcelas]
-            liquido = round(valor_total * (1 - taxa), 2)
-            comprovantes.append({
-                "valor_bruto": valor_total,
-                "parcelas": f"{parcelas}x",
-                "taxa": taxa,
-                "valor_liquido": liquido,
-                "hora": formatar_horario(),
-                "pago": False
-            })
+def calcular_total_bruto_pendente():
+    total = sum(c["valor_bruto"] for c in comprovantes if not c["pago"])
+    return f"💰 Total a pagar (sem desconto): R$ {total:,.2f}"
 
-            mensagem = f"""📄 Comprovante analisado:
-💰 Valor bruto: {formatar_valor(valor_total)}
-💰 Tipo: Cartão em {parcelas}x
-⏰ Horário: {formatar_horario()}
-📉 Taxa aplicada: {taxa*100:.2f}%
-✅ Valor líquido a pagar: {formatar_valor(liquido)}"""
-            update.message.reply_text(mensagem)
+def listar_comprovantes(pagos=False):
+    lista = [c for c in comprovantes if c["pago"] == pagos]
+    if not lista:
+        return "Nenhum comprovante encontrado."
+    resposta = ""
+    for c in lista:
+        resposta += (f"💰 R$ {c['valor_bruto']:,.2f} | "
+                     f"{c['tipo']} | "
+                     f"⏰ {c['horario']}\n")
+    total = sum(c["valor_bruto"] for c in lista)
+    status = "✅ Pagos" if pagos else "⏳ Pendentes"
+    resposta += f"\n📊 Total {status}: R$ {total:,.2f}"
+    return resposta
 
-        except:
-            update.message.reply_text("❌ Erro ao processar o valor parcelado.")
+def marcar_como_pago():
+    for s in solicitacoes_pagamento:
+        for c in comprovantes:
+            if not c["pago"] and s <= c["valor_liquido"]:
+                c["valor_liquido"] -= s
+                if c["valor_liquido"] <= 0.01:
+                    c["pago"] = True
+                solicitacoes_pagamento.remove(s)
+                return f"✅ Pagamento de R$ {s:,.2f} registrado com sucesso!"
+    return "⚠️ Nenhum valor pendente compatível com o pagamento."
 
-def listar_pendentes(update, context=None):
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    if not pendentes:
-        update.message.reply_text("✅ Todos os comprovantes foram pagos.")
-        return
+def registrar_solicitacao_pagamento(valor_str):
+    try:
+        valor = float(valor_str.replace(",", "."))
+        solicitacoes_pagamento.append(valor)
+        return f"📥 Pagamento solicitado de R$ {valor:,.2f}. Envie a chave Pix."
+    except:
+        return "❌ Valor inválido. Tente novamente."
 
-    msg = "📋 *Comprovantes pendentes:*\n"
-    total = 0
-    for c in pendentes:
-        msg += f"• {formatar_valor(c['valor_liquido'])} – {c['parcelas']} – ⏰ {c['hora']}\n"
-        total += c["valor_liquido"]
-    msg += f"\n💰 Total: {formatar_valor(total)}"
-    update.message.reply_text(msg, parse_mode="Markdown")
-
-def listar_pagos(update, context=None):
-    pagos = [c for c in comprovantes if c["pago"]]
-    if not pagos:
-        update.message.reply_text("Nenhum pagamento registrado ainda.")
-        return
-
-    msg = "✅ *Comprovantes pagos:*\n"
-    total = 0
-    for c in pagos:
-        msg += f"• {formatar_valor(c['valor_liquido'])} – {c['parcelas']} – ⏰ {c['hora']}\n"
-        total += c["valor_liquido"]
-    msg += f"\n💰 Total: {formatar_valor(total)}"
-    update.message.reply_text(msg, parse_mode="Markdown")
-
-def registrar_pagamento(update, context=None):
-    texto = update.message.text.lower()
-    valor_digitado = parse_valor(texto)
-
-    pendentes = [c for c in comprovantes if not c["pago"]]
-    total_pendente = sum(c["valor_liquido"] for c in pendentes)
-
-    if not pendentes:
-        update.message.reply_text("✅ Nenhum comprovante pendente.")
-        return
-
-    if valor_digitado:
-        if valor_digitado > total_pendente:
-            update.message.reply_text(f"❌ O valor excede o total devido de {formatar_valor(total_pendente)}.")
-            return
-
-        restante = valor_digitado
-        for c in pendentes:
-            if c["pago"]:
-                continue
-            if restante >= c["valor_liquido"]:
-                restante -= c["valor_liquido"]
-                c["pago"] = True
-            else:
-                c["valor_liquido"] -= restante
-                restante = 0
-                break
-        pagamentos_feitos.append(valor_digitado)
-        update.message.reply_text(f"✅ Pagamento de {formatar_valor(valor_digitado)} registrado.")
-    else:
-        for c in reversed(comprovantes):
-            if not c["pago"]:
-                c["pago"] = True
-                pagamentos_feitos.append(c["valor_liquido"])
-                update.message.reply_text(f"✅ Pagamento de {formatar_valor(c['valor_liquido'])} registrado.")
-                break
-
-def solicitar_pagamento(update, context=None):
-    update.message.reply_text("Digite o valor que deseja solicitar:")
-    context.user_data["aguardando_valor"] = True
-
-def corrigir_valor_comando(update):
-    if not comprovantes:
-        update.message.reply_text("Nenhum comprovante para corrigir.")
-        return
-    ultimo = comprovantes[-1]
-    novo_valor = parse_valor(update.message.text)
-    if not novo_valor:
-        update.message.reply_text("Valor inválido.")
-        return
-    taxa = ultimo["taxa"]
-    ultimo["valor_bruto"] = novo_valor
-    ultimo["valor_liquido"] = round(novo_valor * (1 - taxa), 2)
-    update.message.reply_text(f"Valor corrigido para {formatar_valor(ultimo['valor_bruto'])}, líquido: {formatar_valor(ultimo['valor_liquido'])}.")
-
-def limpar_dados():
-    comprovantes.clear()
-    pagamentos_feitos.clear()
-
-def calcular_valor_liquido_total():
-    return round(sum(c["valor_liquido"] for c in comprovantes if not c["pago"]), 2)
-
-def calcular_valor_bruto_total():
-    return round(sum(c["valor_bruto"] for c in comprovantes if not c["pago"]), 2)
+def listar_pagamentos():
+    return listar_comprovantes(pagos=True)
