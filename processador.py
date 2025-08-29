@@ -1,158 +1,163 @@
-from datetime import datetime, timedelta
-import pytz
+import os
+from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, Filters
+from processador import (
+    processar_mensagem,
+    marcar_como_pago,
+    listar_pendentes,
+    listar_pagamentos,
+    total_pendente_liquido,
+    total_bruto_pendente,
+    registrar_pagamento_parcial,
+    solicitar_pagamento,
+    gerar_status
+)
 
-comprovantes = []
-pagamentos_parciais = []
+# Inicializar Flask e Bot
+app = Flask(__name__)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROUP_ID = int(os.environ.get("GROUP_ID"))
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))
+bot = Bot(token=TELEGRAM_TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-taxas_cartao = {
-    1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659,
-    5: 0.0719, 6: 0.0829, 7: 0.0919, 8: 0.0999,
-    9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
-    13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519,
-    17: 0.1589, 18: 0.1684
-}
-taxa_pix = 0.002  # 0,2%
+@app.route('/')
+def home():
+    return '🤖 Bot DBH/Guimicell está no ar com sucesso!'
 
-def formatar_valor(valor):
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return 'ok', 200
 
-def obter_horario_brasilia():
-    fuso_brasilia = pytz.timezone("America/Sao_Paulo")
-    return datetime.now(fuso_brasilia).strftime("%H:%M")
+# Manipulador de mensagens recebidas
+def processar(update, context):
+    mensagem = update.message.text.lower()
+    chat_id = update.message.chat_id
 
-def processar_mensagem(mensagem):
-    try:
-        texto = mensagem.lower().replace("r$", "").replace("reais", "").strip()
-        valor = None
-        parcelas = 1
-        tipo = None
+    if "pagamento feito" in mensagem:
+        resposta = marcar_como_pago()
 
-        if "pix" in texto:
-            tipo = "PIX"
-            texto = texto.replace("pix", "").strip()
-            valor = float(texto.replace(".", "").replace(",", "."))
+    elif "quanto devo" in mensagem:
+        valor = total_pendente_liquido()
+        resposta = f"💰 Devo ao lojista: R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        elif "x" in texto:
-            tipo = "Cartão"
-            partes = texto.split("x")
-            if len(partes) == 2:
-                valor_str, parcelas_str = partes
-                valor = float(valor_str.replace(".", "").replace(",", "."))
-                parcelas = int(parcelas_str.strip())
+    elif "total a pagar" in mensagem:
+        valor = total_bruto_pendente()
+        resposta = f"📌 Total bruto dos comprovantes pendentes: R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        if valor is None or tipo is None:
-            return None
+    elif "listar pendentes" in mensagem:
+        resposta = listar_pendentes()
 
-        if tipo == "PIX":
-            taxa = taxa_pix
-        else:
-            taxa = taxas_cartao.get(parcelas, 0)
+    elif "listar pagos" in mensagem:
+        resposta = listar_pagamentos()
 
-        valor_liquido = valor * (1 - taxa)
-
-        comprovantes.append({
-            "valor": valor,
-            "tipo": tipo,
-            "parcelas": parcelas,
-            "taxa": taxa,
-            "valor_liquido": valor_liquido,
-            "horario": obter_horario_brasilia(),
-            "pago": False
-        })
-
-        return (
-            "📄 Comprovante analisado:\n"
-            f"💰 Valor bruto: {formatar_valor(valor)}\n"
-            f"💳 Tipo: {tipo} ({parcelas}x)\n" if tipo == "Cartão" else f"💳 Tipo: {tipo}\n"
-            f"⏰ Horário: {comprovantes[-1]['horario']}\n"
-            f"📉 Taxa aplicada: {taxa*100:.2f}%\n"
-            f"✅ Valor líquido a pagar: {formatar_valor(valor_liquido)}"
+    elif "ajuda" in mensagem:
+        resposta = (
+            "📋 *Comandos disponíveis:*\n"
+            "• Envie: `1000 pix` ou `1500 10x`\n"
+            "• pagamento feito ✅\n"
+            "• quanto devo\n"
+            "• total a pagar\n"
+            "• listar pendentes\n"
+            "• listar pagos\n"
+            "• solicitar pagamento\n"
+            "• /status"
         )
 
-    except Exception as e:
-        return f"⚠️ Erro ao processar o comprovante. Verifique o formato e tente novamente.\n{e}"
+    elif "solicitar pagamento" in mensagem:
+        context.user_data["esperando_valor_solicitacao"] = True
+        resposta = "💬 Qual valor deseja solicitar (em reais)?"
 
-def marcar_como_pago():
+    elif context.user_data.get("esperando_valor_solicitacao"):
+        try:
+            valor = float(mensagem.replace("r$", "").replace(".", "").replace(",", "."))
+            context.user_data["valor_solicitacao"] = valor
+            context.user_data["esperando_valor_solicitacao"] = False
+            context.user_data["esperando_chave_pix"] = True
+            resposta = "🔑 Agora informe a chave Pix para receber o pagamento:"
+        except:
+            resposta = "❌ Valor inválido. Por favor envie no formato: 300 ou 500,00"
+
+    elif context.user_data.get("esperando_chave_pix"):
+        chave = mensagem.strip()
+        valor = context.user_data.pop("valor_solicitacao", 0)
+        context.user_data["esperando_chave_pix"] = False
+        resposta = solicitar_pagamento(valor, chave)
+
+    else:
+        resultado = processar_mensagem(mensagem)
+        resposta = resultado if resultado else "❌ Formato inválido. Envie algo como:\n1000 pix\nou\n1200 6x"
+
+    context.bot.send_message(chat_id=chat_id, text=resposta, parse_mode="Markdown")
+
+# Registrar o handler de mensagens
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar))
+
+@app.route('/comando', methods=['GET'])
+def comando():
+    return 'Use /webhook para interagir com o bot.'
+
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    def marcar_como_pago():
     for c in comprovantes:
-        if not c['pago']:
-            c['pago'] = True
-            return "✅ Pagamento marcado com sucesso!"
-    return "⚠️ Nenhum comprovante pendente encontrado."
-
-def listar_pendentes():
-    pendentes = [c for c in comprovantes if not c['pago']]
-    if not pendentes:
-        return "✅ Nenhum comprovante pendente."
-    resposta = "📋 *Comprovantes Pendentes:*\n"
-    for c in pendentes:
-        resposta += f"- {formatar_valor(c['valor_liquido'])} ({c['tipo']}) ⏰ {c['horario']}\n"
-    resposta += f"\n💰 Total pendente: {formatar_valor(sum(c['valor_liquido'] for c in pendentes))}"
-    return resposta
-
-def listar_pagamentos():
-    pagos = [c for c in comprovantes if c['pago']]
-    if not pagos:
-        return "❌ Nenhum pagamento realizado ainda."
-    resposta = "📗 *Pagamentos Realizados:*\n"
-    for c in pagos:
-        resposta += f"- {formatar_valor(c['valor_liquido'])} ({c['tipo']}) ⏰ {c['horario']}\n"
-    resposta += f"\n💸 Total pago: {formatar_valor(sum(c['valor_liquido'] for c in pagos))}"
-    return resposta
+        if not c["pago"]:
+            c["pago"] = True
 
 def total_pendente_liquido():
-    return sum(c["valor_liquido"] for c in comprovantes if not c["pago"])
+    return sum(c["liquido"] for c in comprovantes if not c["pago"])
 
 def total_bruto_pendente():
     return sum(c["valor"] for c in comprovantes if not c["pago"])
 
-def registrar_pagamento_parcial(valor):
-    saldo = total_pendente_liquido()
-    if saldo <= 0:
-        return "✅ Nenhum valor pendente no momento."
+def listar_pagamentos():
+    return pagamentos_feitos
 
-    if valor > saldo:
-        return f"⚠️ O valor pago excede o saldo pendente ({formatar_valor(saldo)}). Tente novamente."
+def listar_pendentes():
+    return [c for c in comprovantes if not c["pago"]]
 
-    restante = valor
-    for c in comprovantes:
-        if not c["pago"]:
-            if c["valor_liquido"] <= restante:
-                restante -= c["valor_liquido"]
-                c["pago"] = True
+def registrar_pagamento_parcial(valor_pagamento):
+    total_pendente = total_pendente_liquido()
+    if valor_pagamento > total_pendente:
+        return False
+
+    restante = valor_pagamento
+    for comp in comprovantes:
+        if not comp["pago"]:
+            if restante >= comp["liquido"]:
+                restante -= comp["liquido"]
+                comp["pago"] = True
             else:
-                c["valor_liquido"] -= restante
-                c["valor"] = c["valor_liquido"] / (1 - c["taxa"])
+                comp["liquido"] -= restante
                 restante = 0
-            if restante <= 0:
                 break
-    pagamentos_parciais.append(valor)
-    return f"✅ Pagamento parcial de {formatar_valor(valor)} registrado com sucesso."
 
-def solicitar_pagamento(valor, chave_pix):
-    saldo = total_pendente_liquido()
-    if saldo <= 0:
-        return "✅ Nenhum valor disponível para solicitar no momento."
+    pagamentos_feitos.append(valor_pagamento)
+    return True
 
-    if valor > saldo:
-        return f"⚠️ Valor solicitado ({formatar_valor(valor)}) excede o saldo disponível ({formatar_valor(saldo)})."
+def solicitar_pagamento(update):
+    total = total_pendente_liquido()
+    if total == 0:
+        update.message.reply_text("✅ Nenhum valor pendente para solicitar no momento.")
+        return
 
-    return (
-        "📩 *Solicitação de Pagamento Recebida:*\n"
-        f"💰 Valor solicitado: {formatar_valor(valor)}\n"
-        f"🔑 Chave Pix: `{chave_pix}`\n\n"
-        "💬 Envie o comprovante após o pagamento com a mensagem 'pagamento feito' para abater este valor."
+    update.message.reply_text(
+        f"📤 Quanto deseja solicitar do total de {formatar_valor(total)}?\n"
+        f"(Responda com o valor, ex: 300,00)"
     )
 
 def gerar_status():
-    total_pago = sum(c['valor_liquido'] for c in comprovantes if c['pago'])
-    total_pendente = sum(c['valor_liquido'] for c in comprovantes if not c['pago'])
-    total_pix = sum(c['valor_liquido'] for c in comprovantes if c['tipo'] == 'PIX')
-    total_cartao = sum(c['valor_liquido'] for c in comprovantes if c['tipo'] == 'Cartão')
-
-    return (
-        "📊 *Fechamento do Dia:*\n"
-        f"💳 Total em Cartão: {formatar_valor(total_cartao)}\n"
-        f"💵 Total em Pix: {formatar_valor(total_pix)}\n"
-        f"✅ Total Pago: {formatar_valor(total_pago)}\n"
-        f"⏳ Total Pendente: {formatar_valor(total_pendente)}"
-    )
+    total_pix = sum(c["liquido"] for c in comprovantes if c["tipo"] == "PIX")
+    total_cartao = sum(c["liquido"] for c in comprovantes if c["tipo"] == "Cartão")
+    total_pago = sum(pagamentos_feitos)
+    total_pendente = sum(c["liquido"] for c in comprovantes if not c["pago"])
+    return {
+        "pix": total_pix,
+        "cartao": total_cartao,
+        "pago": total_pago,
+        "pendente": total_pendente
+    }
