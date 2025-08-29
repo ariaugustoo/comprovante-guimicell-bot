@@ -1,141 +1,89 @@
-from telegram import Update
-from telegram.ext import CallbackContext
-import re
+from datetime import datetime
+import pytz
 
 comprovantes = []
 pagamentos = []
 solicitacoes = []
 
-def parse_valor(mensagem):
-    mensagem = mensagem.replace('.', '').replace(',', '.')
-    match = re.search(r"(\d+(\.\d{1,2})?)", mensagem)
-    return float(match.group(1)) if match else None
+taxas_cartao = {
+    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29,
+    7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52,
+    13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
+}
 
-def tipo_pagamento(mensagem):
-    if "pix" in mensagem.lower():
-        return "PIX"
-    elif "x" in mensagem.lower():
-        return "Cartão"
-    return "Indefinido"
+def formatar_mensagem_comprovante(valor, tipo, horario, taxa, liquido):
+    return f"""📄 *Comprovante analisado:*
+💰 Valor bruto: R$ {valor:,.2f}
+💳 Tipo: {tipo}
+⏰ Horário: {horario}
+📉 Taxa aplicada: {taxa:.2f}%
+✅ Valor líquido a pagar: R$ {liquido:,.2f}""".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def taxa_pagamento(mensagem):
-    if "pix" in mensagem.lower():
-        return 0.002
-    match = re.search(r"(\d{1,2})x", mensagem.lower())
-    if match:
-        parcelas = int(match.group(1))
-        tabela = {
-            1: 0.0439, 2: 0.0519, 3: 0.0619, 4: 0.0659,
-            5: 0.0719, 6: 0.0829, 7: 0.0919, 8: 0.0999,
-            9: 0.1029, 10: 0.1088, 11: 0.1199, 12: 0.1252,
-            13: 0.1369, 14: 0.1419, 15: 0.1469, 16: 0.1519,
-            17: 0.1589, 18: 0.1684
-        }
-        return tabela.get(parcelas, 0.15)
-    return 0.0
-
-def formatar(valor):
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def processar_mensagem(update: Update, context=None):
-    mensagem = update.message.text.lower()
-    chat_id = update.message.chat_id
-
-    if "ajuda" in mensagem:
-        update.message.reply_text(listar_comandos())
-        return
-    if "listar pendentes" in mensagem:
-        update.message.reply_text(listar_pendentes())
-        return
-    if "listar pagos" in mensagem:
-        update.message.reply_text(listar_pagos())
-        return
-    if "solicitar pagamento" in mensagem:
-        update.message.reply_text("💸 Digite o valor que deseja solicitar:")
-        return
-    if "status" in mensagem or "fechamento do dia" in mensagem:
-        update.message.reply_text(comando_status())
-        return
-    if "pagamento feito" in mensagem:
-        update.message.reply_text(registrar_pagamento())
-        return
-    if "quanto devo" in mensagem:
-        total = sum([c["valor_liquido"] for c in comprovantes]) - sum(pagamentos)
-        update.message.reply_text(f"💰 Devo ao lojista: {formatar(total)}")
-        return
-
-    valor = parse_valor(mensagem)
-    if not valor:
-        update.message.reply_text("❗ Não entendi o valor. Envie no formato correto.")
-        return
-
-    tipo = tipo_pagamento(mensagem)
-    taxa = taxa_pagamento(mensagem)
-    liquido = round(valor * (1 - taxa), 2)
-
-    comprovantes.append({
-        "bruto": valor,
-        "tipo": tipo,
-        "taxa": taxa,
-        "valor_liquido": liquido
-    })
-
-    resposta = f"""📄 *Comprovante analisado:*
-💰 Valor bruto: {formatar(valor)}
-💰 Tipo: {tipo}
-📉 Taxa aplicada: {taxa*100:.2f}%
-✅ Valor líquido a pagar: {formatar(liquido)}"""
-
-    update.message.reply_text(resposta, parse_mode="Markdown")
-
-def registrar_pagamento():
-    if not solicitacoes:
-        return "⚠️ Nenhuma solicitação pendente."
-
-    valor_pago = solicitacoes.pop(0)
-    total_liquido = sum(c["valor_liquido"] for c in comprovantes)
-    total_pago = sum(pagamentos)
-
-    if total_pago + valor_pago > total_liquido:
-        return f"❌ O valor pago excede o total pendente."
-
-    pagamentos.append(valor_pago)
-    return f"✅ Recebido! Estamos quase quitando tudo 😉"
-
-def listar_comandos():
-    return """📋 *Comandos disponíveis:*
-1. `valor + pix` → Ex: `1000 pix`
-2. `valor + parcelas` → Ex: `3000 6x`
-3. `listar pendentes`
-4. `listar pagos`
-5. `solicitar pagamento`
-6. `pagamento feito`
-7. `quanto devo`
-8. `status` ou `fechamento do dia`
-9. `ajuda`"""
+def registrar_comprovante(valor, tipo):
+    timezone = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.now(timezone).strftime('%H:%M')
+    taxa = 0.2 if tipo == "PIX" else taxas_cartao.get(tipo, 0)
+    liquido = round(valor * (1 - taxa / 100), 2)
+    comprovantes.append({"valor": valor, "tipo": tipo, "horario": agora, "liquido": liquido, "pago": False})
+    return formatar_mensagem_comprovante(valor, "PIX" if tipo == "PIX" else f"{tipo}x", agora, taxa, liquido)
 
 def listar_pendentes():
-    pendentes = [c for c in comprovantes]
-    texto = ""
+    pendentes = [c for c in comprovantes if not c["pago"]]
+    if not pendentes:
+        return "📭 Nenhum comprovante pendente no momento."
+    linhas = ["📋 *Comprovantes Pendentes:*"]
     for i, c in enumerate(pendentes, 1):
-        texto += f"{i}. {formatar(c['valor_liquido'])} - {c['tipo']}\n"
-    return f"📌 Comprovantes pendentes:\n{texto or '✅ Nenhum'}"
+        linhas.append(f"{i}. 💰 R$ {c['liquido']:,.2f} | ⏰ {c['horario']} | 💳 {c['tipo']}".replace(",", "X").replace(".", ",").replace("X", "."))
+    total = sum(c["liquido"] for c in pendentes)
+    linhas.append(f"\n💰 Total pendente: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    return "\n".join(linhas)
 
 def listar_pagos():
-    if not pagamentos:
-        return "💳 Nenhum pagamento foi feito ainda."
-    texto = "\n".join([f"{i+1}. {formatar(v)}" for i, v in enumerate(pagamentos)])
-    return f"✅ Pagamentos realizados:\n{texto}"
+    pagos = [c for c in comprovantes if c["pago"]]
+    if not pagos:
+        return "❌ Nenhum comprovante foi marcado como pago ainda."
+    linhas = ["📄 *Comprovantes Pagos:*"]
+    for i, c in enumerate(pagos, 1):
+        linhas.append(f"{i}. 💰 R$ {c['liquido']:,.2f} | ⏰ {c['horario']} | 💳 {c['tipo']}".replace(",", "X").replace(".", ",").replace("X", "."))
+    total = sum(c["liquido"] for c in pagos)
+    linhas.append(f"\n✅ Total pago: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    return "\n".join(linhas)
 
-def comando_status():
-    total_pix = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "PIX")
-    total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "Cartão")
-    total_pago = sum(pagamentos)
-    total_liquido = sum(c["valor_liquido"] for c in comprovantes)
-    total_pendente = total_liquido - total_pago
+def marcar_como_pago(valor):
+    pendentes = [c for c in comprovantes if not c["pago"]]
+    restante = valor
+    for c in pendentes:
+        if restante <= 0:
+            break
+        if c["liquido"] <= restante:
+            restante -= c["liquido"]
+            c["pago"] = True
+        else:
+            c["liquido"] -= restante
+            restante = 0
+    pagamentos.append(valor)
+    return f"✅ Recebido! Estamos quase quitando tudo 😉"
 
-    return f"""📊 *Fechamento do dia:*
-💳 Total em Cartão: {formatar(total_cartao)}
-💸 Total em PIX: {formatar(total_pix)}
-✅ Total pago: {formatar(total_pago)}
-⏳ Total pendente: {formatar(total_pendente)}"""
+def total_pendentes():
+    return round(sum(c["liquido"] for c in comprovantes if not c["pago"]), 2)
+
+def total_bruto_pendentes():
+    return round(sum(c["valor"] for c in comprovantes if not c["pago"]), 2)
+
+def solicitar_pagamento(valor, chave):
+    credito_disponivel = total_pendentes()
+    if valor > credito_disponivel:
+        return f"🚫 Você só pode solicitar até R$ {credito_disponivel:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    solicitacoes.append({"valor": valor, "chave": chave})
+    return f"📬 Solicitação de pagamento registrada!\n💰 Valor: R$ {valor:,.2f}\n🔑 Chave Pix: {chave}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def status():
+    total_pix = sum(c["liquido"] for c in comprovantes if c["tipo"] == "PIX")
+    total_cartao = sum(c["liquido"] for c in comprovantes if c["tipo"] != "PIX")
+    total_pago = sum(c["liquido"] for c in comprovantes if c["pago"])
+    total_pendente = sum(c["liquido"] for c in comprovantes if not c["pago"])
+    return f"""📊 *Status Geral:*
+💳 Cartão (líquido): R$ {total_cartao:,.2f}
+💸 PIX (líquido): R$ {total_pix:,.2f}
+✅ Total pago: R$ {total_pago:,.2f}
+⏳ Total pendente: R$ {total_pendente:,.2f}""".replace(",", "X").replace(".", ",").replace("X", ".")
