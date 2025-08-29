@@ -5,42 +5,47 @@ from telegram import Bot, Update
 from telegram.ext import Dispatcher, MessageHandler, Filters
 from processador import processar_mensagem
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# ✅ Configurações
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROUP_ID = int(os.environ.get("GROUP_ID", "-1000000000000"))  # Substitua pelo seu ID
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "123456789"))       # Substitua pelo seu ID
 
-app = Flask(__name__)
+# ✅ Inicia bot
 bot = Bot(token=TOKEN)
-
+app = Flask(__name__)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
-def verificar_autorizacao(update):
-    chat_id = update.effective_chat.id
-    return chat_id == GROUP_ID
+# ✅ Logging para depuração
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
+# ✅ Função chamada quando o bot receber uma nova mensagem
 def handle_message(update, context):
-    if verificar_autorizacao(update):
+    try:
         processar_mensagem(update)
+    except Exception as e:
+        logging.error(f"Erro ao processar mensagem: {e}")
+        update.message.reply_text("❌ Erro ao processar a mensagem. Tente novamente.")
 
-# Registrar o handler de mensagens
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+# ✅ Registrar handler
+dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_message))
 
-@app.route("/")
-def index():
-    return "Bot de comprovantes está ativo!"
-
-@app.route("/webhook", methods=["POST"])
+# ✅ Rota para o webhook
+@app.route(f"/webhook", methods=["POST"])
 def webhook():
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
-    return "OK"
-    if __name__ == "__main__":
-    # Ativando log para debugging
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.INFO
-    )
-    
-    # Inicia o servidor Flask na porta esperada pelo Render
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+        return "OK", 200
+
+# ✅ Rota para testar se o bot está vivo
+@app.route("/")
+def index():
+    return "🤖 Bot de comprovantes está ativo!", 200
+
+# ✅ Roda o app
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
