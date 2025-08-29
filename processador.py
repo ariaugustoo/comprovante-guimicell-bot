@@ -86,7 +86,7 @@ def processar_mensagem(update):
         else:
             message.reply_text("❌ Erro ao processar o comprovante de cartão.")
             if texto == "listar pendentes":
-        listar_pendentes(message)
+                listar_pendentes(message)
     elif texto == "listar pagos":
         listar_pagamentos(message)
     elif texto == "quanto devo":
