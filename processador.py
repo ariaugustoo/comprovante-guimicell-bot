@@ -105,7 +105,7 @@ def listar_pendentes(message):
     texto += f"\n💰 Total a pagar: R$ {total:.2f}"
     message.reply_text(texto)
     def listar_pagamentos(message):
-    texto = "📄 *Pagamentos já realizados:*\n"
+        texto = "📄 *Pagamentos já realizados:*\n"
     total = 0
     for i, c in enumerate(comprovantes):
         if c["pago"]:
