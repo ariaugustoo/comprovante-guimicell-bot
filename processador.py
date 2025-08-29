@@ -56,7 +56,7 @@ def processar_mensagem(message):
             )
         return
         def total_pendente_liquido():
-    return sum(c["líquido"] for c in comprovantes if not c["pago"])
+            return sum(c["líquido"] for c in comprovantes if not c["pago"])
 
 
 def total_bruto_pendente():
