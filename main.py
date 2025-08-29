@@ -1,87 +1,70 @@
-import re
-from datetime import datetime, timedelta
-import pytz
+import os
+import logging
+from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+from apscheduler.schedulers.background import BackgroundScheduler
+from dotenv import load_dotenv
+from processador import (
+    processar_mensagem,
+    comando_pagamento_feito,
+    comando_quanto_devo,
+    comando_total_a_pagar,
+    comando_listar_pendentes,
+    comando_listar_pagos,
+    comando_solicitar_pagamento,
+    comando_ajuda,
+    comando_limpar_tudo,
+    comando_corrigir_valor
+)
 
-# Banco de dados simples
-comprovantes = []
-pagamentos_parciais = []
+# Carregar variáveis de ambiente
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Taxas de cartão por parcela
-TAXAS_CARTAO = {
-    1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
-    6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
-    11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19,
-    15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84
-}
+# Configurar logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-def normalizar_valor(valor_str):
-    try:
-        valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".").strip()
-        return float(valor_str)
-    except:
-        return None
+# Inicializar Flask e Bot
+app = Flask(__name__)
+bot = Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-def calcular_liquido(valor, parcelas=None):
-    if parcelas:
-        taxa = TAXAS_CARTAO.get(parcelas, 0) / 100
-    else:
-        taxa = 0.002  # PIX
-    return round(valor * (1 - taxa), 2), round(taxa * 100, 2)
+# Comandos do bot
+dispatcher.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text("🤖 Bot ativo!")))
+dispatcher.add_handler(CommandHandler("ajuda", comando_ajuda))
+dispatcher.add_handler(CommandHandler("quanto_devo", comando_quanto_devo))
+dispatcher.add_handler(CommandHandler("total_a_pagar", comando_total_a_pagar))
+dispatcher.add_handler(CommandHandler("listar_pendentes", comando_listar_pendentes))
+dispatcher.add_handler(CommandHandler("listar_pagos", comando_listar_pagos))
+dispatcher.add_handler(CommandHandler("solicitar_pagamento", comando_solicitar_pagamento))
+dispatcher.add_handler(CommandHandler("pagamento_feito", comando_pagamento_feito))
 
-def registrar_comprovante(valor_bruto, tipo, parcelas=None):
-    horario = datetime.now(pytz.timezone("America/Sao_Paulo")).strftime("%H:%M")
-    valor_liquido, taxa_aplicada = calcular_liquido(valor_bruto, parcelas)
-    comprovantes.append({
-        "valor_bruto": valor_bruto,
-        "tipo": tipo,
-        "parcelas": parcelas,
-        "horario": horario,
-        "taxa": taxa_aplicada,
-        "valor_liquido": valor_liquido,
-        "pago": False
-    })
-    return valor_bruto, tipo, parcelas, horario, taxa_aplicada, valor_liquido
+# Comandos de admin
+dispatcher.add_handler(CommandHandler("limpar_tudo", comando_limpar_tudo, filters=Filters.user(user_id=ADMIN_ID)))
+dispatcher.add_handler(CommandHandler("corrigir_valor", comando_corrigir_valor, filters=Filters.user(user_id=ADMIN_ID)))
 
-def marcar_como_pago(valor_pagamento):
-    total_pendente = calcular_total_liquido()
-    if valor_pagamento > total_pendente:
-        return False, "❌ Valor excede o total devido ao lojista. Pagamento não registrado."
+# Qualquer outra mensagem
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
 
-    valor_restante = valor_pagamento
-    for comp in comprovantes:
-        if not comp["pago"]:
-            if comp["valor_liquido"] <= valor_restante:
-                valor_restante -= comp["valor_liquido"]
-                comp["pago"] = True
-            else:
-                comp["valor_liquido"] -= valor_restante
-                pagamentos_parciais.append({
-                    "data": datetime.now().strftime("%d/%m/%Y"),
-                    "valor": valor_restante
-                })
-                valor_restante = 0
-            if valor_restante == 0:
-                break
-    return True, "✅ Pagamento registrado com sucesso."
+# Webhook do Render
+@app.route(f"/webhook", methods=["POST"])
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+    return "ok"
 
-def calcular_total_liquido():
-    return round(sum(comp["valor_liquido"] for comp in comprovantes if not comp["pago"]), 2)
+# Agendador (opcional)
+def tarefa_repetitiva():
+    bot.send_message(chat_id=GROUP_ID, text="⏰ Rodando tarefa agendada.")
 
-def listar_pendentes():
-    pendentes = [comp for comp in comprovantes if not comp["pago"]]
-    if not pendentes:
-        return "📂 Nenhum comprovante pendente."
-    resposta = "📌 *Comprovantes Pendentes:*\n"
-    for i, c in enumerate(pendentes, 1):
-        resposta += f"\n{i}. 💰 *R${c['valor_bruto']:.2f}* | {c['tipo']} | ⏰ {c['horario']}"
-    resposta += f"\n\n💰 *Total pendente:* R$ {calcular_total_liquido():.2f}"
-    return resposta
+scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
+# scheduler.add_job(tarefa_repetitiva, 'interval', hours=1)  # Exemplo de tarefa
+scheduler.start()
 
-def listar_pagos():
-    pagos = [comp for comp in comprovantes if comp["pago"]]
-    if not pagos:
-        return "📂 Nenhum comprovante pago ainda."
-    resposta = "✅ *Comprovantes Pagos:*\n"
-    for i, c in enumerate(pagos, 1):
-        resposta += f"\n{i}. R${c['valor_bruto']:.2f} | {c['tipo']} | {c['horario']}"
-    return resposta
+# Iniciar servidor no Render
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
