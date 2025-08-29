@@ -1,46 +1,48 @@
 import os
-import telegram
-from telegram.ext import Dispatcher, MessageHandler, Filters
 from flask import Flask, request
-from processador import processar_mensagem
+from telegram import Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+from processador import (
+    processar_mensagem,
+    listar_comandos,
+    registrar_pagamento,
+    listar_pendentes,
+    listar_pagos,
+    solicitar_pagamento,
+    comando_ajuda,
+    comando_status
+)
 from dotenv import load_dotenv
 
-# Carregar variáveis de ambiente
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Inicializa bot e Flask
-bot = telegram.Bot(token=TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot, None, workers=0)
 
-# Handler principal
-def registrar_handlers():
-    def handler(update, context):
-        processar_mensagem(update, context)
-
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handler))
-    dispatcher.add_handler(MessageHandler(Filters.command, handler))
-
-registrar_handlers()
-
-# Endpoint raiz (para testes)
 @app.route('/')
 def index():
-    return 'Bot de comprovantes rodando!'
+    return 'Bot de comprovantes online!'
 
-# Endpoint do webhook
-@app.route(f'/{TOKEN}', methods=['POST'])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.method == "POST":
-        update = telegram.Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)  # ✅ Dispara o handler automaticamente com contexto
-        return 'ok'
-    return 'Method Not Allowed', 405
+    update = Update.de_json(request.get_json(force=True), bot)
+    processar_mensagem(update)
+    return 'ok'
 
-# Start Flask
 if __name__ == '__main__':
+    from telegram import Bot
+    from telegram.ext import Updater
+
+    bot = Bot(token=TOKEN)
+    updater = Updater(token=TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", comando_ajuda))
+    dp.add_handler(CommandHandler("ajuda", comando_ajuda))
+    dp.add_handler(CommandHandler("status", comando_status))
+
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, processar_mensagem))
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
