@@ -159,3 +159,47 @@ if __name__ == '__main__':
                 if valor_solicitado > obter_valor_total_pendente():
                     update.message.reply_text(
                         f"❌ Você está solicitando mais do que o valor disponível. Total disponível:"
+if valor > total_pendente:
+        return f"❌ Você está solicitando mais do que o valor disponível. Total disponível: R$ {obter_valor_total_pendente():.2f}"
+
+    pagamentos_registrados.append({
+        "valor": valor,
+        "pago_por": nome_usuario,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+    return f"✅ Pagamento de R$ {valor:.2f} registrado com sucesso e abatido do total pendente."
+
+
+def gerar_resumo_status():
+    pagos_pix = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "pix" and c["pago"])
+    pagos_cartao = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "cartão" and c["pago"])
+    pendente_pix = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "pix" and not c["pago"])
+    pendente_cartao = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "cartão" and not c["pago"])
+    total_pago = pagos_pix + pagos_cartao
+    total_pendente = pendente_pix + pendente_cartao
+
+    return (
+        "📊 *Resumo do dia:*\n"
+        f"💰 Total pago: R$ {total_pago:.2f}\n"
+        f"💸 Pago via PIX: R$ {pagos_pix:.2f}\n"
+        f"💳 Pago via Cartão: R$ {pagos_cartao:.2f}\n"
+        f"📌 Total pendente: R$ {total_pendente:.2f}\n"
+        f"🔹 Pendente via PIX: R$ {pendente_pix:.2f}\n"
+        f"🔹 Pendente via Cartão: R$ {pendente_cartao:.2f}"
+    )
+
+
+def gerar_fechamento_do_dia():
+    total_pago = sum(float(c["valor_liquido"]) for c in comprovantes if c["pago"])
+    total_pendente = sum(float(c["valor_liquido"]) for c in comprovantes if not c["pago"])
+    total_pix = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "pix")
+    total_cartao = sum(float(c["valor_liquido"]) for c in comprovantes if c["tipo"].lower() == "cartão")
+
+    return (
+        "📅 *Fechamento do dia:*\n"
+        f"💰 Total pago: R$ {total_pago:.2f}\n"
+        f"📌 Total pendente: R$ {total_pendente:.2f}\n"
+        f"💸 Total via PIX: R$ {total_pix:.2f}\n"
+        f"💳 Total via Cartão: R$ {total_cartao:.2f}"
+    )
