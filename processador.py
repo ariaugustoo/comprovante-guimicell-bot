@@ -158,4 +158,4 @@ if __name__ == '__main__':
 
                 if valor_solicitado > obter_valor_total_pendente():
                     update.message.reply_text(
-                        f"❌ Você está solicitando mais do que o valor disponível. Total disponível:
+                        f"❌ Você está solicitando mais do que o valor disponível. Total disponível:"
