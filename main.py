@@ -18,10 +18,8 @@ app = Flask(__name__)
 bot = Bot(token=TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0)
 
-# Habilita logs (opcional)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Handler principal de mensagens
 def handle_message(update: Update, context):
     mensagem = update.message
     user_id = mensagem.from_user.id
@@ -32,10 +30,8 @@ def handle_message(update: Update, context):
     if resposta:
         bot.send_message(chat_id=mensagem.chat.id, text=resposta)
 
-# Registrar handler
 dispatcher.add_handler(MessageHandler(Filters.text & Filters.chat(chat_id=GROUP_ID), handle_message))
 
-# Rota principal para webhook
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.method == "POST":
@@ -44,11 +40,9 @@ def webhook():
         return 'OK'
     return 'Invalid request'
 
-# Rota de teste (opcional)
 @app.route('/')
 def home():
     return 'Bot ativo!'
 
-# Executar app Flask
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
