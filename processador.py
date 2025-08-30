@@ -4,19 +4,28 @@ import re
 import os
 import shlex
 
-# Armazenamento em memória (para testes)
+# Armazenamento em memória
 comprovantes = []
 pagamentos = []
 solicitacoes = []
 
-# Taxas por tipo de pagamento
+# Taxas cobradas do lojista (em ordem das parcelas)
 taxas_cartao = {
     1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
     6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
     11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69,
     16: 15.19, 17: 15.89, 18: 16.84
 }
-taxa_pix = 0.20
+taxa_pix = 0.20  # Taxa cobrada do lojista no Pix
+
+# Suas taxas reais (em ordem das parcelas)
+taxas_reais_cartao = {
+    1: 3.28, 2: 3.96, 3: 4.68, 4: 5.40, 5: 6.12,
+    6: 6.84, 7: 7.72, 8: 8.44, 9: 9.16, 10: 9.88,
+    11: 10.60, 12: 11.32, 13: 12.04, 14: 12.76, 15: 13.48,
+    16: 14.20, 17: 14.92, 18: 15.64
+}
+taxa_real_pix = 0.00  # Sua taxa real no Pix
 
 def formatar_valor(valor):
     try:
@@ -120,6 +129,57 @@ def listar_comprovantes():
         )
     return "\n".join(linhas)
 
+def relatorio_lucro():
+    total_bruto_pix = total_bruto_cartao = 0.0
+    total_liquido_pix = total_liquido_cartao = 0.0
+    total_lucro_pix = total_lucro_cartao = 0.0
+
+    for c in comprovantes:
+        valor = c["valor_bruto"]
+        tipo = c["tipo"]
+        liquido_loja = c["valor_liquido"]
+
+        if tipo == "PIX":
+            taxa_loja = taxa_pix
+            taxa_maquina = taxa_real_pix
+            lucro_pix = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_pix += valor
+            total_liquido_pix += liquido_loja
+            total_lucro_pix += lucro_pix
+        elif "X" in tipo:
+            try:
+                parcelas = int(re.sub(r'\D', '', tipo))
+                taxa_loja = taxas_cartao.get(parcelas, 0)
+                taxa_maquina = taxas_reais_cartao.get(parcelas, 0)
+                lucro_cartao = valor * (taxa_loja - taxa_maquina) / 100
+                total_bruto_cartao += valor
+                total_liquido_cartao += liquido_loja
+                total_lucro_cartao += lucro_cartao
+            except Exception:
+                pass
+
+    total_bruto = total_bruto_pix + total_bruto_cartao
+    total_liquido = total_liquido_pix + total_liquido_cartao
+    total_lucro = total_lucro_pix + total_lucro_cartao
+
+    return f"""📈 *Relatório de Lucro Diário*
+
+PIX:
+ • Bruto: {formatar_valor(total_bruto_pix)}
+ • Líquido (loja): {formatar_valor(total_liquido_pix)}
+ • Seu lucro: {formatar_valor(total_lucro_pix)}
+
+Cartão:
+ • Bruto: {formatar_valor(total_bruto_cartao)}
+ • Líquido (loja): {formatar_valor(total_liquido_cartao)}
+ • Seu lucro: {formatar_valor(total_lucro_cartao)}
+
+TOTAL:
+ • Bruto: {formatar_valor(total_bruto)}
+ • Líquido (loja): {formatar_valor(total_liquido)}
+ • Seu lucro: {formatar_valor(total_lucro)}
+"""
+
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
 
@@ -137,6 +197,10 @@ def processar_mensagem(texto, user_id):
     # Listar comprovantes (admin)
     if texto == "listar comprovantes" and user_id == int(os.getenv("ADMIN_ID", "0")):
         return listar_comprovantes()
+
+    # Relatório de lucro (admin)
+    if texto == "relatorio lucro" and user_id == int(os.getenv("ADMIN_ID", "0")):
+        return relatorio_lucro()
 
     valor, tipo = extrair_valor_tipo(texto)
     if valor and tipo:
@@ -237,6 +301,7 @@ def processar_mensagem(texto, user_id):
 🔒 Admin:
 • listar comprovantes
 • corrigir valor <índice> <novo valor> <novo tipo>
+• relatorio lucro
 • fechamento diário
 • limpar tudo
 """
