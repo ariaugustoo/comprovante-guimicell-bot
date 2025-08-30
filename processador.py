@@ -351,4 +351,4 @@ def processar_mensagem(texto):
         total = sum(c["valor_bruto"] for c in comprovantes if not c["pago"])
         return f"💰 Valor bruto pendente (sem desconto): R$ {total:,.2f}"
 
-    elif texto == "/status" or texto.lower().strip() == "
+    elif texto == "/status" or texto.lower().strip() == "status":
