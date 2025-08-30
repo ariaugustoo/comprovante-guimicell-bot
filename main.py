@@ -1,5 +1,5 @@
 import os
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
 from processador import processar_mensagem
 
