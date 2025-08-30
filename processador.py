@@ -1,6 +1,7 @@
 from datetime import datetime
 import pytz
 import re
+import os
 
 # Armazenamento em memória (para testes)
 comprovantes = []
@@ -17,6 +18,11 @@ taxas_cartao = {
 taxa_pix = 0.20
 
 def formatar_valor(valor):
+    # Aceita float ou string
+    try:
+        valor = float(valor)
+    except:
+        valor = 0.0
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def get_horario_brasilia():
@@ -24,59 +30,118 @@ def get_horario_brasilia():
     return datetime.now(fuso).strftime('%H:%M')
 
 def normalizar_valor(texto):
-    texto = texto.replace("R$", "").replace(" ", "")
-    texto = texto.replace(".", "").replace(",", ".")
+    # Aceita 1.000,00 / 1000,00 / 100,00 / 1000.00 / 1000
+    texto = re.sub(r'[^\d,\.]', '', texto)
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    else:
+        texto = texto.replace(",", "")
     try:
         return float(texto)
-    except:
+    except Exception:
         return None
 
+def extrair_valor_tipo(texto):
+    # Regex que aceita valor e tipo em várias ordens e formatos
+    # Ex: 1.000,00 pix / 1000,00 pix / 1000,00 3x / pix 1.000,00 / 10x 1000,00
+    texto = texto.lower().strip()
+    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(pix|\d{1,2}x)$", texto)
+    if match:
+        valor, tipo = match.groups()
+        return normalizar_valor(valor), tipo
+    # Tenta inverter
+    match = re.match(r"^(pix|\d{1,2}x)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
+    if match:
+        tipo, valor = match.groups()
+        return normalizar_valor(valor), tipo
+    return None, None
+
 def calcular_valor_liquido(valor, tipo):
-    if tipo.lower() == "pix":
+    tipo = tipo.lower()
+    if tipo == "pix":
         taxa = taxa_pix
-    elif "x" in tipo.lower():
+    elif "x" in tipo:
         parcelas = int(re.sub(r'\D', '', tipo))
         taxa = taxas_cartao.get(parcelas, 0)
+        if taxa == 0:
+            return None, None
     else:
         return None, None
     valor_liquido = valor * (1 - taxa / 100)
     return round(valor_liquido, 2), taxa
 
+def credito_disponivel():
+    return round(sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos), 2)
+
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
 
-    if "pix" in texto or "x" in texto:
-        valor = normalizar_valor(texto)
-        tipo = "pix" if "pix" in texto else texto
-        if not valor:
-            return "❌ Valor inválido. Envie no formato: 1000,00 pix ou 2000,00 10x"
-
+    # Comando de comprovante
+    valor, tipo = extrair_valor_tipo(texto)
+    if valor and tipo:
         liquido, taxa = calcular_valor_liquido(valor, tipo)
         if liquido is None:
-            return "❌ Tipo de pagamento inválido."
-
+            return "❌ Tipo de pagamento inválido. Exemplo: 1000,00 pix ou 2000,00 10x"
         comprovantes.append({
             "valor_bruto": valor,
             "valor_liquido": liquido,
-            "tipo": "PIX" if "pix" in tipo else tipo.upper(),
+            "tipo": "PIX" if tipo == "pix" else tipo.upper(),
             "hora": get_horario_brasilia()
         })
-
         return f"""📄 Comprovante analisado:
 💰 Valor bruto: {formatar_valor(valor)}
-💰 Tipo: {'PIX' if 'pix' in tipo else tipo.upper()}
+💰 Tipo: {'PIX' if tipo == 'pix' else tipo.upper()}
 ⏰ Horário: {get_horario_brasilia()}
 📉 Taxa aplicada: {taxa:.2f}%
 ✅ Valor líquido a pagar: {formatar_valor(liquido)}"""
 
+    # Solicitação de pagamento
+    if texto.startswith("solicito"):
+        valor = normalizar_valor(texto)
+        if not valor:
+            return "❌ Valor inválido para solicitação."
+        credito = credito_disponivel()
+        if valor > credito:
+            return f"❌ Solicitação maior que o crédito disponível: {formatar_valor(credito)}"
+        solicitacoes.append({"valor": valor})
+        return f"📢 Solicitação de pagamento registrada: {formatar_valor(valor)}.\nAguardando confirmação com 'pagamento feito'."
+
+    # Pagamento feito
+    if texto.startswith("pagamento feito"):
+        valor = normalizar_valor(texto)
+        # Tenta pegar da fila de solicitações se não veio valor
+        if valor is None:
+            if not solicitacoes:
+                return "❌ Nenhuma solicitação de pagamento encontrada."
+            valor = solicitacoes.pop(0)["valor"]
+        else:
+            # Se tem valor, remove da fila se existir
+            for s in solicitacoes:
+                if abs(s["valor"] - valor) < 0.01:
+                    solicitacoes.remove(s)
+                    break
+        credito = credito_disponivel()
+        if valor > credito:
+            return f"❌ O pagamento de {formatar_valor(valor)} excede o crédito disponível: {formatar_valor(credito)}"
+        saldo_anterior = credito
+        novo_saldo = round(credito - valor, 2)
+        pagamentos.append({"valor": valor})
+        return f"""✅ Pagamento registrado com sucesso.
+💵 Valor: {formatar_valor(valor)}
+📉 Saldo anterior: {formatar_valor(saldo_anterior)}
+💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
+
+    # Saldo liquido disponível
     if texto == "total liquido":
-        pendente = sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos)
+        pendente = credito_disponivel()
         return f"💰 Valor líquido disponível: {formatar_valor(pendente)}"
 
+    # Pagamentos realizados
     if texto == "pagamentos realizados":
         total = sum(p["valor"] for p in pagamentos)
         return f"✅ Total pago até agora: {formatar_valor(total)}"
 
+    # Fechamento do dia
     if texto == "fechamento do dia":
         total_pix = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "PIX")
         total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PIX")
@@ -89,52 +154,14 @@ def processar_mensagem(texto, user_id):
 ✅ Total Pago: {formatar_valor(total_pago)}
 📌 Total Pendente: {formatar_valor(pendente)}"""
 
-    if texto.startswith("solicito"):
-        valor = normalizar_valor(texto)
-        if not valor:
-            return "❌ Valor inválido para solicitação."
-
-        credito = sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos)
-        if valor > credito:
-            return f"❌ Solicitação maior que o crédito disponível: {formatar_valor(credito)}"
-
-        solicitacoes.append({"valor": valor})
-        return f"📢 Solicitação de pagamento registrada: {formatar_valor(valor)}.\nAguardando confirmação com 'pagamento feito'."
-
-    if "pagamento feito" in texto:
-        valor = normalizar_valor(texto)
-        if valor is None:
-            # Se não tem valor, usa o último valor solicitado
-            if not solicitacoes:
-                return "❌ Nenhuma solicitação de pagamento encontrada."
-            valor = solicitacoes.pop(0)["valor"]
-        else:
-            # Se tem valor, tira da fila o equivalente
-            for s in solicitacoes:
-                if s["valor"] == valor:
-                    solicitacoes.remove(s)
-                    break
-
-        credito = sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos)
-        if valor > credito:
-            return f"❌ O pagamento de {formatar_valor(valor)} excede o crédito disponível: {formatar_valor(credito)}"
-
-        saldo_anterior = credito
-        novo_saldo = round(credito - valor, 2)
-        pagamentos.append({"valor": valor})
-
-        return f"""✅ Pagamento registrado com sucesso.
-💵 Valor: {formatar_valor(valor)}
-📉 Saldo anterior: {formatar_valor(saldo_anterior)}
-💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
-
-    if texto == "limpar tudo" and user_id == int(os.getenv("ADMIN_ID")):
+    # Comandos admin
+    if texto == "limpar tudo" and user_id == int(os.getenv("ADMIN_ID", "0")):
         comprovantes.clear()
         pagamentos.clear()
         solicitacoes.clear()
         return "🧹 Todos os dados foram zerados com sucesso."
 
-    if texto == "corrigir valor" and user_id == int(os.getenv("ADMIN_ID")):
+    if texto == "corrigir valor" and user_id == int(os.getenv("ADMIN_ID", "0")):
         return "⚠️ Função de correção ainda não implementada."
 
     if texto == "ajuda":
