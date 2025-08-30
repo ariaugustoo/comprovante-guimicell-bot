@@ -1,47 +1,34 @@
 import os
-import logging
-from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, Filters
+from telegram import Update, Bot
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
 from processador import processar_mensagem
-from dotenv import load_dotenv
 
-# Carregar variáveis de ambiente
-load_dotenv()
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-app = Flask(__name__)
-bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
-
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-def handle_message(update: Update, context):
-    mensagem = update.message
-    user_id = mensagem.from_user.id
-    texto = mensagem.text.strip() if mensagem.text else ""
+def responder(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    texto = update.message.text
 
     resposta = processar_mensagem(texto, user_id)
-
     if resposta:
-        bot.send_message(chat_id=mensagem.chat.id, text=resposta)
+        # Se for no privado, responde no privado
+        if update.message.chat.type == "private":
+            update.message.reply_text(resposta)
+        # Se for no grupo, responde para o grupo
+        elif update.message.chat.id == GROUP_ID:
+            context.bot.send_message(chat_id=GROUP_ID, text=resposta)
+        # Se for outro lugar, responde no mesmo chat
+        else:
+            update.message.reply_text(resposta)
 
-dispatcher.add_handler(MessageHandler(Filters.text & Filters.chat(chat_id=GROUP_ID), handle_message))
+def main():
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
+    updater.start_polling()
+    updater.idle()
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return 'OK'
-    return 'Invalid request'
-
-@app.route('/')
-def home():
-    return 'Bot ativo!'
-
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+if __name__ == "__main__":
+    main()
