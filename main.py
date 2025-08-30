@@ -1,41 +1,54 @@
 import os
+import logging
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
+from telegram.ext import Dispatcher, MessageHandler, Filters
 from processador import processar_mensagem
 from dotenv import load_dotenv
 
+# Carregar variáveis de ambiente
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_ID = os.getenv("ADMIN_ID")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = Bot(token=TOKEN)
+# Configuração do bot e Flask
 app = Flask(__name__)
+bot = Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-dispatcher = Dispatcher(bot=bot, update_queue=None, use_context=True)
+# Habilita logs (opcional)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-def handle_message(update, context):
-    texto = update.message.text
-    user_id = update.message.from_user.id
+# Handler principal de mensagens
+def handle_message(update: Update, context):
+    mensagem = update.message
+    user_id = mensagem.from_user.id
+    texto = mensagem.text.strip() if mensagem.text else ""
+
     resposta = processar_mensagem(texto, user_id)
+
     if resposta:
-        context.bot.send_message(chat_id=update.effective_chat.id, text=resposta)
+        bot.send_message(chat_id=mensagem.chat.id, text=resposta)
 
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+# Registrar handler
+dispatcher.add_handler(MessageHandler(Filters.text & Filters.chat(chat_id=GROUP_ID), handle_message))
 
+# Rota principal para webhook
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
-    return "ok"
+        return 'OK'
+    return 'Invalid request'
 
+# Rota de teste (opcional)
 @app.route('/')
 def home():
-    return 'Bot está no ar!'
+    return 'Bot ativo!'
 
+# Executar app Flask
 if __name__ == '__main__':
-    PORT = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
