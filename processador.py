@@ -76,6 +76,7 @@ def calcular_valor_liquido(valor, tipo):
     return round(valor_liquido, 2), taxa
 
 def credito_disponivel():
+    # Valor líquido disponível = total dos líquidos dos comprovantes - total dos pagamentos realizados
     return round(sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos), 2)
 
 def fechar_dia_e_zerar_saldos():
@@ -255,9 +256,10 @@ def processar_mensagem(texto, user_id):
 📉 Saldo anterior: {formatar_valor(saldo_anterior)}
 💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
 
+    # Ajuste: sempre soma todos líquidos dos comprovantes (não desconta pagamentos)
     if texto == "total liquido":
-        pendente = credito_disponivel()
-        return f"💰 Valor líquido disponível: {formatar_valor(pendente)}"
+        total_liquido = sum(c["valor_liquido"] for c in comprovantes)
+        return f"💰 Valor líquido disponível: {formatar_valor(total_liquido)}"
 
     if texto == "pagamentos realizados":
         total = sum(p["valor"] for p in pagamentos)
