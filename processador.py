@@ -9,7 +9,7 @@ comprovantes = []
 pagamentos = []
 solicitacoes = []
 
-# Taxas cobradas do lojista (em ordem das parcelas)
+# Taxas cobradas do lojista
 taxas_cartao = {
     1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
     6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
@@ -18,7 +18,7 @@ taxas_cartao = {
 }
 taxa_pix = 0.20  # Taxa cobrada do lojista no Pix
 
-# Suas taxas reais (em ordem das parcelas)
+# Suas taxas reais
 taxas_reais_cartao = {
     1: 3.28, 2: 3.96, 3: 4.68, 4: 5.40, 5: 6.12,
     6: 6.84, 7: 7.72, 8: 8.44, 9: 9.16, 10: 9.88,
@@ -83,7 +83,6 @@ def fechar_dia_e_zerar_saldos():
     comprovantes.clear()
     pagamentos.clear()
     solicitacoes.clear()
-    # Mantém saldo pendente como "PENDENTE" apenas se houver
     if pendente > 0:
         comprovantes.append({
             "valor_bruto": pendente,
@@ -202,6 +201,10 @@ def processar_mensagem(texto, user_id):
     if texto == "relatorio lucro" and user_id == int(os.getenv("ADMIN_ID", "0")):
         return relatorio_lucro()
 
+    # Mostrar seu id
+    if texto == "meu id":
+        return f"Seu user_id: {user_id}"
+
     valor, tipo = extrair_valor_tipo(texto)
     if valor and tipo:
         liquido, taxa = calcular_valor_liquido(valor, tipo)
@@ -299,6 +302,7 @@ def processar_mensagem(texto, user_id):
 • fechamento do dia
 
 🔒 Admin:
+• meu id
 • listar comprovantes
 • corrigir valor <índice> <novo valor> <novo tipo>
 • relatorio lucro
