@@ -18,10 +18,9 @@ taxas_cartao = {
 taxa_pix = 0.20
 
 def formatar_valor(valor):
-    # Aceita float ou string
     try:
         valor = float(valor)
-    except:
+    except Exception:
         valor = 0.0
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -30,7 +29,6 @@ def get_horario_brasilia():
     return datetime.now(fuso).strftime('%H:%M')
 
 def normalizar_valor(texto):
-    # Aceita 1.000,00 / 1000,00 / 100,00 / 1000.00 / 1000
     texto = re.sub(r'[^\d,\.]', '', texto)
     if "," in texto:
         texto = texto.replace(".", "").replace(",", ".")
@@ -42,14 +40,11 @@ def normalizar_valor(texto):
         return None
 
 def extrair_valor_tipo(texto):
-    # Regex que aceita valor e tipo em várias ordens e formatos
-    # Ex: 1.000,00 pix / 1000,00 pix / 1000,00 3x / pix 1.000,00 / 10x 1000,00
     texto = texto.lower().strip()
     match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(pix|\d{1,2}x)$", texto)
     if match:
         valor, tipo = match.groups()
         return normalizar_valor(valor), tipo
-    # Tenta inverter
     match = re.match(r"^(pix|\d{1,2}x)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
     if match:
         tipo, valor = match.groups()
@@ -73,10 +68,24 @@ def calcular_valor_liquido(valor, tipo):
 def credito_disponivel():
     return round(sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos), 2)
 
+def fechar_dia_e_zerar_saldos():
+    pendente = credito_disponivel()
+    comprovantes.clear()
+    pagamentos.clear()
+    solicitacoes.clear()
+    # Mantém saldo pendente como "PENDENTE" apenas se houver
+    if pendente > 0:
+        comprovantes.append({
+            "valor_bruto": pendente,
+            "valor_liquido": pendente,
+            "tipo": "PENDENTE",
+            "hora": get_horario_brasilia()
+        })
+    return f"✅ Fechamento realizado. Saldos de Cartão e Pix zerados. Saldo pendente mantido: {formatar_valor(pendente)}."
+
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
 
-    # Comando de comprovante
     valor, tipo = extrair_valor_tipo(texto)
     if valor and tipo:
         liquido, taxa = calcular_valor_liquido(valor, tipo)
@@ -95,7 +104,6 @@ def processar_mensagem(texto, user_id):
 📉 Taxa aplicada: {taxa:.2f}%
 ✅ Valor líquido a pagar: {formatar_valor(liquido)}"""
 
-    # Solicitação de pagamento
     if texto.startswith("solicito"):
         valor = normalizar_valor(texto)
         if not valor:
@@ -106,16 +114,13 @@ def processar_mensagem(texto, user_id):
         solicitacoes.append({"valor": valor})
         return f"📢 Solicitação de pagamento registrada: {formatar_valor(valor)}.\nAguardando confirmação com 'pagamento feito'."
 
-    # Pagamento feito
     if texto.startswith("pagamento feito"):
         valor = normalizar_valor(texto)
-        # Tenta pegar da fila de solicitações se não veio valor
         if valor is None:
             if not solicitacoes:
                 return "❌ Nenhuma solicitação de pagamento encontrada."
             valor = solicitacoes.pop(0)["valor"]
         else:
-            # Se tem valor, remove da fila se existir
             for s in solicitacoes:
                 if abs(s["valor"] - valor) < 0.01:
                     solicitacoes.remove(s)
@@ -131,22 +136,19 @@ def processar_mensagem(texto, user_id):
 📉 Saldo anterior: {formatar_valor(saldo_anterior)}
 💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
 
-    # Saldo liquido disponível
     if texto == "total liquido":
         pendente = credito_disponivel()
         return f"💰 Valor líquido disponível: {formatar_valor(pendente)}"
 
-    # Pagamentos realizados
     if texto == "pagamentos realizados":
         total = sum(p["valor"] for p in pagamentos)
         return f"✅ Total pago até agora: {formatar_valor(total)}"
 
-    # Fechamento do dia
     if texto == "fechamento do dia":
         total_pix = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "PIX")
-        total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PIX")
+        total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PIX" and c["tipo"] != "PENDENTE")
         total_pago = sum(p["valor"] for p in pagamentos)
-        pendente = total_pix + total_cartao - total_pago
+        pendente = credito_disponivel()
         return f"""📅 Fechamento do Dia:
 
 💳 Total Cartão: {formatar_valor(total_cartao)}
@@ -154,7 +156,9 @@ def processar_mensagem(texto, user_id):
 ✅ Total Pago: {formatar_valor(total_pago)}
 📌 Total Pendente: {formatar_valor(pendente)}"""
 
-    # Comandos admin
+    if texto == "fechamento diário" and user_id == int(os.getenv("ADMIN_ID", "0")):
+        return fechar_dia_e_zerar_saldos()
+
     if texto == "limpar tudo" and user_id == int(os.getenv("ADMIN_ID", "0")):
         comprovantes.clear()
         pagamentos.clear()
@@ -183,6 +187,7 @@ def processar_mensagem(texto, user_id):
 
 🔒 Admin:
 • limpar tudo
+• fechamento diário
 • corrigir valor
 """
 
