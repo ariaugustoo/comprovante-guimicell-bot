@@ -1,53 +1,43 @@
 import os
+import logging
 from flask import Flask, request
-import telegram
-from telegram import Update
-from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler
-from processador import (
-    processar_mensagem,
-    marcar_como_pago,
-    quanto_devo,
-    total_a_pagar,
-    solicitar_pagamento,
-    listar_pendentes,
-    listar_pagamentos,
-    mostrar_ajuda,
-    limpar_tudo,
-    corrigir_valor,
-    status_bot
-)
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, Filters
+from processador import processar_mensagem
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROUP_ID = os.environ.get("GROUP_ID")
-ADMIN_ID = int(os.environ.get("ADMIN_ID"))
+# Configurações
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = telegram.Bot(token=TOKEN)
-
+# Inicializa o bot e o Flask
 app = Flask(__name__)
+bot = Bot(token=TOKEN)
 
-dispatcher = Dispatcher(bot=bot, update_queue=None, use_context=True)
+# Configura logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-def registrar_handlers():
-    dispatcher.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text("Bot ativo!")))
-    dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), processar_mensagem))
-    dispatcher.add_handler(CommandHandler("status", status_bot))
-    dispatcher.add_handler(CommandHandler("limpar", limpar_tudo))
-    dispatcher.add_handler(CommandHandler("corrigir", corrigir_valor))
-    dispatcher.add_handler(CommandHandler("ajuda", mostrar_ajuda))
-    dispatcher.add_handler(CommandHandler("listar_pendentes", listar_pendentes))
-    dispatcher.add_handler(CommandHandler("listar_pagos", listar_pagamentos))
+# Dispatcher para gerenciar mensagens
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
-registrar_handlers()
+# Função principal para processar cada mensagem recebida
+def handle_message(update: Update, context):
+    if update.message and update.message.chat.id == GROUP_ID:
+        resposta = processar_mensagem(update.message.text, update.message.from_user.id)
+        if resposta:
+            context.bot.send_message(chat_id=GROUP_ID, text=resposta, parse_mode='Markdown')
 
-@app.route(f'/{TOKEN}', methods=['POST'])
+# Adiciona o handler ao dispatcher
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+# Rota principal do webhook
+@app.route(f"/webhook", methods=["POST"])
 def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return 'ok'
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+    return "ok", 200
 
-@app.route('/')
-def index():
-    return 'Bot ativo com webhook!'
-
-if __name__ == '__main__':
+# Inicializa o app no Render
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
