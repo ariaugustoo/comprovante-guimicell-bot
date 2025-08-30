@@ -2,6 +2,7 @@ from datetime import datetime
 import pytz
 import re
 import os
+import shlex
 
 # Armazenamento em memória (para testes)
 comprovantes = []
@@ -83,8 +84,59 @@ def fechar_dia_e_zerar_saldos():
         })
     return f"✅ Fechamento realizado. Saldos de Cartão e Pix zerados. Saldo pendente mantido: {formatar_valor(pendente)}."
 
+def corrigir_comprovante(indice, valor_txt, tipo_txt):
+    try:
+        indice = int(indice) - 1
+        if indice < 0 or indice >= len(comprovantes):
+            return "❌ Índice de comprovante inválido."
+        valor = normalizar_valor(valor_txt)
+        if valor is None:
+            return "❌ Valor inválido."
+        liquido, taxa = calcular_valor_liquido(valor, tipo_txt)
+        if liquido is None:
+            return "❌ Tipo de pagamento inválido."
+        comprovantes[indice] = {
+            "valor_bruto": valor,
+            "valor_liquido": liquido,
+            "tipo": "PIX" if tipo_txt.lower() == "pix" else tipo_txt.upper(),
+            "hora": get_horario_brasilia()
+        }
+        return f"""✅ Comprovante corrigido!
+Novo valor bruto: {formatar_valor(valor)}
+Novo tipo: {'PIX' if tipo_txt.lower() == 'pix' else tipo_txt.upper()}
+Nova taxa: {taxa:.2f}%
+Novo valor líquido: {formatar_valor(liquido)}
+"""
+    except Exception as e:
+        return f"❌ Erro ao corrigir comprovante: {str(e)}"
+
+def listar_comprovantes():
+    if not comprovantes:
+        return "📋 Nenhum comprovante cadastrado."
+    linhas = ["📋 Comprovantes cadastrados:"]
+    for idx, c in enumerate(comprovantes, start=1):
+        linhas.append(
+            f"[{idx}] {formatar_valor(c['valor_bruto'])} - {c['tipo']} - Líquido: {formatar_valor(c['valor_liquido'])} - Hora: {c['hora']}"
+        )
+    return "\n".join(linhas)
+
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
+
+    # Corrigir comprovante (admin)
+    if texto.startswith("corrigir valor") and user_id == int(os.getenv("ADMIN_ID", "0")):
+        try:
+            partes = shlex.split(texto)
+            if len(partes) < 5:
+                return "❌ Uso: corrigir valor <índice> <novo valor> <novo tipo>"
+            _, _, indice, valor_txt, tipo_txt = partes[:5]
+            return corrigir_comprovante(indice, valor_txt, tipo_txt)
+        except Exception:
+            return "❌ Erro de sintaxe. Exemplo: corrigir valor 1 1000,00 10x"
+
+    # Listar comprovantes (admin)
+    if texto == "listar comprovantes" and user_id == int(os.getenv("ADMIN_ID", "0")):
+        return listar_comprovantes()
 
     valor, tipo = extrair_valor_tipo(texto)
     if valor and tipo:
@@ -165,9 +217,6 @@ def processar_mensagem(texto, user_id):
         solicitacoes.clear()
         return "🧹 Todos os dados foram zerados com sucesso."
 
-    if texto == "corrigir valor" and user_id == int(os.getenv("ADMIN_ID", "0")):
-        return "⚠️ Função de correção ainda não implementada."
-
     if texto == "ajuda":
         return """🤖 *Comandos disponíveis*:
 
@@ -186,9 +235,10 @@ def processar_mensagem(texto, user_id):
 • fechamento do dia
 
 🔒 Admin:
-• limpar tudo
+• listar comprovantes
+• corrigir valor <índice> <novo valor> <novo tipo>
 • fechamento diário
-• corrigir valor
+• limpar tudo
 """
 
     return None
