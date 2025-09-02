@@ -8,7 +8,12 @@ comprovantes = []
 pagamentos = []
 solicitacoes = []
 
-# Taxas
+# Comandos restritos a privado
+comandos_privados = ["relatorio lucro", "listar comprovantes", "listar pagamentos", "corrigir valor", "config taxa", "limpar tudo", "fechamento diário"]
+
+def is_admin(user_id):
+    return user_id == int(os.getenv("ADMIN_ID", "0"))
+
 taxas_cartao = {
     1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
     6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
@@ -119,6 +124,16 @@ def listar_comprovantes():
         )
     return "\n".join(linhas)
 
+def listar_pagamentos():
+    if not pagamentos:
+        return "💸 Nenhum pagamento realizado."
+    linhas = ["💸 Pagamentos realizados:"]
+    for idx, p in enumerate(pagamentos, start=1):
+        linhas.append(
+            f"[{idx}] {formatar_valor(p['valor'])}"
+        )
+    return "\n".join(linhas)
+
 def relatorio_lucro():
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
@@ -199,8 +214,8 @@ def zerar_saldos():
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
 
-    # Corrigir comprovante (admin)
-    if texto.startswith("corrigir valor") and user_id == int(os.getenv("ADMIN_ID", "0")):
+    # Comandos restritos ao admin e ao privado
+    if texto.startswith("corrigir valor") and is_admin(user_id):
         try:
             partes = shlex.split(texto)
             if len(partes) < 5:
@@ -210,12 +225,28 @@ def processar_mensagem(texto, user_id):
         except Exception:
             return "❌ Erro de sintaxe. Exemplo: corrigir valor 1 1000,00 10x"
 
-    if texto == "listar comprovantes" and user_id == int(os.getenv("ADMIN_ID", "0")):
+    if texto == "listar comprovantes" and is_admin(user_id):
         return listar_comprovantes()
 
-    if texto == "relatorio lucro" and user_id == int(os.getenv("ADMIN_ID", "0")):
+    if texto == "listar pagamentos" and is_admin(user_id):
+        return listar_pagamentos()
+
+    if texto == "relatorio lucro" and is_admin(user_id):
         return relatorio_lucro()
 
+    if texto == "config taxa" and is_admin(user_id):
+        return "⚙️ Para alterar taxas, edite diretamente no código ou peça uma função personalizada!"
+
+    if texto == "limpar tudo" and is_admin(user_id):
+        comprovantes.clear()
+        pagamentos.clear()
+        solicitacoes.clear()
+        return "🧹 Todos os dados foram zerados com sucesso."
+
+    if texto == "fechamento diário" and is_admin(user_id):
+        return zerar_saldos()
+
+    # Comando público
     if texto == "meu id":
         return f"Seu user_id: {user_id}"
 
@@ -270,7 +301,7 @@ def processar_mensagem(texto, user_id):
 💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
 
     if texto == "total liquido":
-        total_liquido = sum(c["valor_liquido"] for c in comprovantes)
+        total_liquido = sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos)
         return f"💰 Valor líquido disponível: {formatar_valor(total_liquido)}"
 
     if texto == "pagamentos realizados":
@@ -279,15 +310,6 @@ def processar_mensagem(texto, user_id):
 
     if texto == "fechamento do dia":
         return fechamento_do_dia()
-
-    if texto == "fechamento diário" and user_id == int(os.getenv("ADMIN_ID", "0")):
-        return zerar_saldos()
-
-    if texto == "limpar tudo" and user_id == int(os.getenv("ADMIN_ID", "0")):
-        comprovantes.clear()
-        pagamentos.clear()
-        solicitacoes.clear()
-        return "🧹 Todos os dados foram zerados com sucesso."
 
     if texto == "ajuda":
         return """🤖 *Comandos disponíveis*:
@@ -305,10 +327,11 @@ def processar_mensagem(texto, user_id):
 • total liquido
 • pagamentos realizados
 • fechamento do dia
-
-🔒 Admin:
 • meu id
+
+🔒 Admin (somente no privado):
 • listar comprovantes
+• listar pagamentos
 • corrigir valor <índice> <novo valor> <novo tipo>
 • relatorio lucro
 • fechamento diário
