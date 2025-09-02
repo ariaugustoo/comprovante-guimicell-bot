@@ -35,10 +35,21 @@ def formatar_valor(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def get_horario_brasilia():
+    import pytz
     fuso = pytz.timezone('America/Sao_Paulo')
     return datetime.now(fuso).strftime('%H:%M')
 
+# Regex para extrair valor no padrão brasileiro (ex: 1.000,00)
+VALOR_BRL_REGEX = r"(\d{1,3}(?:\.\d{3})*,\d{2})"
+
 def normalizar_valor(texto):
+    texto = texto.strip()
+    match = re.search(VALOR_BRL_REGEX, texto)
+    if match:
+        valor_str = match.group(1)
+        valor_float = float(valor_str.replace('.', '').replace(',', '.'))
+        return valor_float
+    # Caso o valor venha sem ponto/vírgula, tenta converter direto
     texto = re.sub(r'[^\d,\.]', '', texto)
     if "," in texto:
         texto = texto.replace(".", "").replace(",", ".")
@@ -51,6 +62,7 @@ def normalizar_valor(texto):
 
 def extrair_valor_tipo(texto):
     texto = texto.lower().strip()
+    # Exemplo: "4.400,00 pix", "3000,00 2x", "pix 1.200,00"
     match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(pix|\d{1,2}x)$", texto)
     if match:
         valor, tipo = match.groups()
@@ -273,7 +285,7 @@ def processar_mensagem(texto, user_id):
         return f"""📅 Fechamento do Dia:
 
 💳 Total Cartão: {formatar_valor(total_cartao)}
-💸 Total PI.: {formatar_valor(total_pix)}
+💸 Total PIX: {formatar_valor(total_pix)}
 ✅ Total Pago: {formatar_valor(total_pago)}
 📌 Total Pendente: {formatar_valor(pendente)}"""
 
