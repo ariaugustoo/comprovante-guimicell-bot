@@ -1,7 +1,7 @@
 import os
 from telegram import Update
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
-from processador import processar_mensagem
+from processador import processar_mensagem, is_admin, comandos_privados
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
@@ -9,7 +9,19 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 def responder(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
-    texto = update.message.text
+    texto = update.message.text.strip().lower()
+
+    # Verifica se o comando deve ser restrito ao privado
+    for cmd in comandos_privados:
+        if texto.startswith(cmd):
+            if update.message.chat.type != "private":
+                # Se não for privado, pede para enviar no privado
+                update.message.reply_text("⚠️ Este comando só pode ser usado no privado com o bot.")
+                return
+            resposta = processar_mensagem(texto, user_id)
+            if resposta:
+                update.message.reply_text(resposta)
+            return
 
     resposta = processar_mensagem(texto, user_id)
     if resposta:
