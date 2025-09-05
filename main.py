@@ -36,10 +36,27 @@ def responder(update: Update, context: CallbackContext):
             update.message.reply_text(resposta)
 
 def main():
+    use_webhook = os.getenv("USE_WEBHOOK", "false").lower() == "true"
+    PORT = int(os.getenv("PORT", "8443"))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ex: https://seu-app.onrender.com/TELEGRAM_TOKEN
+
     updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
-    updater.start_polling()
+
+    if use_webhook:
+        # No Render/cloud, use webhook
+        updater.start_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
+        )
+    else:
+        # Local/localhost: usa polling, limpando webhook (evita conflitos)
+        updater.bot.delete_webhook()
+        updater.start_polling()
+
     updater.idle()
 
 if __name__ == "__main__":
