@@ -1,20 +1,25 @@
 import os
 from telegram.ext import Updater, MessageHandler, Filters
 
+# Carrega variáveis do ambiente (Render/Heroku)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-PORT = int(os.getenv("PORT", "8443"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.getenv("PORT", "8443"))
 
 def responder(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Olá, seu bot está rodando via Webhook no Render!")
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Olá! Seu bot está funcionando via webhook no Render 🚀"
+    )
 
 def main():
     updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
 
+    # Handler para todas as mensagens de texto
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
-    print("Iniciando bot usando webhook...")
+    # Inicia o webhook (endpoint: /<TELEGRAM_TOKEN>)
     updater.start_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -24,4 +29,5 @@ def main():
     updater.idle()
 
 if __name__ == "__main__":
+    print("Iniciando bot usando webhook...")
     main()
