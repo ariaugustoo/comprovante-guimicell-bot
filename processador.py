@@ -86,7 +86,8 @@ def calcular_valor_liquido(valor, tipo):
     return round(valor_liquido, 2), taxa
 
 def credito_disponivel():
-    return round(sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos), 2)
+    # Não considera comprovantes pendentes no saldo disponível
+    return round(sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PENDENTE") - sum(p["valor"] for p in pagamentos), 2)
 
 def corrigir_comprovante(indice, valor_txt, tipo_txt):
     try:
@@ -135,11 +136,14 @@ def listar_pagamentos():
     return "\n".join(linhas)
 
 def relatorio_lucro():
+    # Só considera comprovantes do dia, ignora saldo pendente
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
     total_lucro_pix = total_lucro_cartao = 0.0
 
     for c in comprovantes:
+        if c["tipo"] == "PENDENTE":
+            continue  # IGNORA saldo pendente
         valor = c["valor_bruto"]
         tipo = c["tipo"]
         liquido_loja = c["valor_liquido"]
@@ -186,6 +190,7 @@ TOTAL:
 """
 
 def fechamento_do_dia():
+    # Só mostra os valores do ciclo atual
     total_pix = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "PIX")
     total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PIX" and c["tipo"] != "PENDENTE")
     total_pago = sum(p["valor"] for p in pagamentos)
@@ -202,6 +207,7 @@ def zerar_saldos():
     comprovantes.clear()
     pagamentos.clear()
     solicitacoes.clear()
+    # Mantém apenas o saldo pendente, se houver
     if pendente > 0:
         comprovantes.append({
             "valor_bruto": pendente,
@@ -301,7 +307,7 @@ def processar_mensagem(texto, user_id):
 💰 Novo saldo disponível: {formatar_valor(novo_saldo)}"""
 
     if texto == "total liquido":
-        total_liquido = sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos)
+        total_liquido = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PENDENTE") - sum(p["valor"] for p in pagamentos)
         return f"💰 Valor líquido disponível: {formatar_valor(total_liquido)}"
 
     if texto == "pagamentos realizados":
