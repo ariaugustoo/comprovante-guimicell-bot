@@ -7,30 +7,27 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 
 # Lista de palavras-chave que ativam o bot (ajuste conforme seus comandos)
-PALAVRAS_ATIVADORAS = ["pix", "solicito", "ajuda", "comprovante", "saldo", "enviar", "fechamento"]
+PALAVRAS_ATIVADORAS = ["pix", "solicito", "ajuda", "comprovante", "saldo", "enviar", "fechamento", "pagamento", "total", "listar", "corrigir", "relatorio", "limpar", "id"]
 
 def mensagem_parece_comando(texto):
     texto = texto.lower().strip()
-    # Checa se começa com alguma palavra-chave
+    # Só responde se começar com uma palavra-chave
     for palavra in PALAVRAS_ATIVADORAS:
         if texto.startswith(palavra):
             return True
-    # Checa se está mencionando o bot (exemplo: @comprovante_dbh_novo), ajuste se quiser
-    # if "@comprovante_dbh_novo" in texto:
-    #     return True
     return False
 
 def responder(update, context):
     usuario_id = update.effective_user.id
     texto = update.message.text or ""
 
-    # Só responde se for um comando plausível ou mensagem privada
+    # Só responde se for comando plausível ou mensagem privada
     if update.message.chat.type == "private" or mensagem_parece_comando(texto):
         resposta = processar_mensagem(texto, usuario_id)
         if not resposta:
             resposta = "❓ Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis."
         context.bot.send_message(chat_id=update.effective_chat.id, text=resposta, parse_mode="Markdown")
-    # Se não for comando, não faz nada (não responde)
+    # Se não for comando, não responde
 
 def error_handler(update, context):
     print(f"Exception: {context.error}")
