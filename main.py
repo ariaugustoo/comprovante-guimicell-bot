@@ -6,12 +6,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 
-# Lista de palavras-chave que ativam o bot (ajuste conforme seus comandos)
-PALAVRAS_ATIVADORAS = ["pix", "solicito", "ajuda", "comprovante", "saldo", "enviar", "fechamento", "pagamento", "total", "listar", "corrigir", "relatorio", "limpar", "id"]
+# Lista de palavras-chave que ativam o bot (pode ajustar conforme seus comandos)
+PALAVRAS_ATIVADORAS = [
+    "pix", "solicito", "ajuda", "comprovante", "saldo",
+    "enviar", "fechamento", "pagamento", "total",
+    "listar", "corrigir", "relatorio", "limpar", "id"
+]
 
 def mensagem_parece_comando(texto):
     texto = texto.lower().strip()
-    # Só responde se começar com uma palavra-chave
     for palavra in PALAVRAS_ATIVADORAS:
         if texto.startswith(palavra):
             return True
@@ -20,8 +23,7 @@ def mensagem_parece_comando(texto):
 def responder(update, context):
     usuario_id = update.effective_user.id
     texto = update.message.text or ""
-
-    # Só responde se for comando plausível ou mensagem privada
+    # Só responde se for comando ou no privado
     if update.message.chat.type == "private" or mensagem_parece_comando(texto):
         resposta = processar_mensagem(texto, usuario_id)
         if not resposta:
