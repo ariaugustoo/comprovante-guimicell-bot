@@ -8,25 +8,45 @@ comprovantes = []
 pagamentos = []
 solicitacoes = []
 
-# Comandos restritos a privado
 comandos_privados = ["relatorio lucro", "listar comprovantes", "listar pagamentos", "corrigir valor", "config taxa", "limpar tudo", "fechamento diário"]
 
 def is_admin(user_id):
     return user_id == int(os.getenv("ADMIN_ID", "0"))
 
+# Taxas originais ELO (imagem 4) + 1%
+taxas_elo = {
+    1: 5.12, 2: 6.22, 3: 6.93, 4: 7.64, 5: 8.35, 6: 9.07, 7: 10.07, 8: 10.92, 9: 11.63, 10: 12.34,
+    11: 13.05, 12: 13.76, 13: 14.47, 14: 15.17, 15: 15.88, 16: 16.59, 17: 17.30, 18: 18.01
+}
+taxas_reais_elo = {  # Supondo taxa de máquina igual às originais
+    1: 4.12, 2: 5.22, 3: 5.93, 4: 6.64, 5: 7.35, 6: 8.07, 7: 9.07, 8: 9.92, 9: 10.63, 10: 11.34,
+    11: 12.05, 12: 12.76, 13: 13.47, 14: 14.17, 15: 14.88, 16: 15.59, 17: 16.30, 18: 17.01
+}
+
+# Taxas originais AMEX (imagem 3) + 1%
+taxas_amex = {
+    1: 5.17, 2: 5.96, 3: 6.68, 4: 7.39, 5: 8.11, 6: 8.82, 7: 9.65, 8: 10.36, 9: 11.07, 10: 11.79,
+    11: 12.50, 12: 13.21, 13: 13.93, 14: 14.64, 15: 15.35, 16: 16.07, 17: 16.78, 18: 17.49
+}
+taxas_reais_amex = {  # Supondo taxa de máquina igual às originais
+    1: 4.17, 2: 4.96, 3: 5.68, 4: 6.39, 5: 7.11, 6: 7.82, 7: 8.65, 8: 9.36, 9: 10.07, 10: 10.79,
+    11: 11.50, 12: 12.21, 13: 12.93, 14: 13.64, 15: 14.35, 16: 15.07, 17: 15.78, 18: 16.49
+}
+
+# Taxas Visa/Master (já no seu código)
 taxas_cartao = {
     1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19,
     6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88,
     11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69,
     16: 15.19, 17: 15.89, 18: 16.84
 }
-taxa_pix = 0.20
 taxas_reais_cartao = {
     1: 3.28, 2: 3.96, 3: 4.68, 4: 5.40, 5: 6.12,
     6: 6.84, 7: 7.72, 8: 8.44, 9: 9.16, 10: 9.88,
     11: 10.60, 12: 11.32, 13: 12.04, 14: 12.76, 15: 13.48,
     16: 14.20, 17: 14.92, 18: 15.64
 }
+taxa_pix = 0.20
 taxa_real_pix = 0.00
 
 def formatar_valor(valor):
@@ -59,34 +79,48 @@ def normalizar_valor(texto):
     except Exception:
         return None
 
-def extrair_valor_tipo(texto):
+def extrair_valor_tipo_bandeira(texto):
+    # Novo: extrai bandeira (elo/amex) se presente
     texto = texto.lower().strip()
-    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(pix|\d{1,2}x)$", texto)
+    # Exemplos de comandos:
+    # "1000,00 elo 18x", "1000,00 amex 12x", "1000,00 10x", "1000,00 pix"
+    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(elo|amex)?\s*(pix|\d{1,2}x)$", texto)
     if match:
-        valor, tipo = match.groups()
-        return normalizar_valor(valor), tipo
-    match = re.match(r"^(pix|\d{1,2}x)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
+        valor, bandeira, tipo = match.groups()
+        bandeira = bandeira if bandeira in ("elo", "amex") else None
+        return normalizar_valor(valor), tipo, bandeira
+    match = re.match(r"^(elo|amex)?\s*(pix|\d{1,2}x)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
     if match:
-        tipo, valor = match.groups()
-        return normalizar_valor(valor), tipo
-    return None, None
+        bandeira, tipo, valor = match.groups()
+        bandeira = bandeira if bandeira in ("elo", "amex") else None
+        return normalizar_valor(valor), tipo, bandeira
+    return None, None, None
 
-def calcular_valor_liquido(valor, tipo):
+def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
     tipo = tipo.lower()
     if tipo == "pix":
         taxa = taxa_pix
+        liquido = valor * (1 - taxa / 100)
+        return round(liquido, 2), taxa
     elif "x" in tipo:
         parcelas = int(re.sub(r'\D', '', tipo))
-        taxa = taxas_cartao.get(parcelas, 0)
+        if bandeira == "elo":
+            taxa = taxas_elo.get(parcelas, 0)
+            taxa_maquina = taxas_reais_elo.get(parcelas, 0)
+        elif bandeira == "amex":
+            taxa = taxas_amex.get(parcelas, 0)
+            taxa_maquina = taxas_reais_amex.get(parcelas, 0)
+        else:
+            taxa = taxas_cartao.get(parcelas, 0)
+            taxa_maquina = taxas_reais_cartao.get(parcelas, 0)
         if taxa == 0:
             return None, None
+        liquido = valor * (1 - taxa / 100)
+        return round(liquido, 2), taxa
     else:
         return None, None
-    valor_liquido = valor * (1 - taxa / 100)
-    return round(valor_liquido, 2), taxa
 
 def credito_disponivel():
-    # Não considera comprovantes pendentes no saldo disponível
     return round(sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PENDENTE") - sum(p["valor"] for p in pagamentos), 2)
 
 def corrigir_comprovante(indice, valor_txt, tipo_txt):
@@ -94,21 +128,22 @@ def corrigir_comprovante(indice, valor_txt, tipo_txt):
         indice = int(indice) - 1
         if indice < 0 or indice >= len(comprovantes):
             return "❌ Índice de comprovante inválido."
-        valor = normalizar_valor(valor_txt)
-        if valor is None:
-            return "❌ Valor inválido."
-        liquido, taxa = calcular_valor_liquido(valor, tipo_txt)
+        valor, tipo, bandeira = extrair_valor_tipo_bandeira(f"{valor_txt} {tipo_txt}")
+        liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
         if liquido is None:
             return "❌ Tipo de pagamento inválido."
+        tipo_str = "PIX" if tipo.lower() == "pix" else tipo.upper()
+        if bandeira:
+            tipo_str = f"{bandeira.upper()} {tipo_str}"
         comprovantes[indice] = {
             "valor_bruto": valor,
             "valor_liquido": liquido,
-            "tipo": "PIX" if tipo_txt.lower() == "pix" else tipo_txt.upper(),
+            "tipo": tipo_str,
             "hora": get_horario_brasilia()
         }
         return f"""✅ Comprovante corrigido!
 Novo valor bruto: {formatar_valor(valor)}
-Novo tipo: {'PIX' if tipo_txt.lower() == 'pix' else tipo_txt.upper()}
+Novo tipo: {tipo_str}
 Nova taxa: {taxa:.2f}%
 Novo valor líquido: {formatar_valor(liquido)}
 """
@@ -136,14 +171,13 @@ def listar_pagamentos():
     return "\n".join(linhas)
 
 def relatorio_lucro():
-    # Só considera comprovantes do dia, ignora saldo pendente
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
     total_lucro_pix = total_lucro_cartao = 0.0
 
     for c in comprovantes:
         if c["tipo"] == "PENDENTE":
-            continue  # IGNORA saldo pendente
+            continue
         valor = c["valor_bruto"]
         tipo = c["tipo"]
         liquido_loja = c["valor_liquido"]
@@ -155,6 +189,22 @@ def relatorio_lucro():
             total_bruto_pix += valor
             total_liquido_pix += liquido_loja
             total_lucro_pix += lucro_pix
+        elif "ELO" in tipo:
+            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+            taxa_loja = taxas_elo.get(parcelas, 0)
+            taxa_maquina = taxas_reais_elo.get(parcelas, 0)
+            lucro_elo = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_cartao += valor
+            total_liquido_cartao += liquido_loja
+            total_lucro_cartao += lucro_elo
+        elif "AMEX" in tipo:
+            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+            taxa_loja = taxas_amex.get(parcelas, 0)
+            taxa_maquina = taxas_reais_amex.get(parcelas, 0)
+            lucro_amex = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_cartao += valor
+            total_liquido_cartao += liquido_loja
+            total_lucro_cartao += lucro_amex
         elif "X" in tipo:
             try:
                 parcelas = int(re.sub(r'\D', '', tipo))
@@ -190,7 +240,6 @@ TOTAL:
 """
 
 def fechamento_do_dia():
-    # Só mostra os valores do ciclo atual
     total_pix = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] == "PIX")
     total_cartao = sum(c["valor_liquido"] for c in comprovantes if c["tipo"] != "PIX" and c["tipo"] != "PENDENTE")
     total_pago = sum(p["valor"] for p in pagamentos)
@@ -207,7 +256,6 @@ def zerar_saldos():
     comprovantes.clear()
     pagamentos.clear()
     solicitacoes.clear()
-    # Mantém apenas o saldo pendente, se houver
     if pendente > 0:
         comprovantes.append({
             "valor_bruto": pendente,
@@ -220,7 +268,6 @@ def zerar_saldos():
 def processar_mensagem(texto, user_id):
     texto = texto.lower().strip()
 
-    # Comandos restritos ao admin e ao privado
     if texto.startswith("corrigir valor") and is_admin(user_id):
         try:
             partes = shlex.split(texto)
@@ -252,24 +299,26 @@ def processar_mensagem(texto, user_id):
     if texto == "fechamento diário" and is_admin(user_id):
         return zerar_saldos()
 
-    # Comando público
     if texto == "meu id":
         return f"Seu user_id: {user_id}"
 
-    valor, tipo = extrair_valor_tipo(texto)
+    valor, tipo, bandeira = extrair_valor_tipo_bandeira(texto)
     if valor and tipo:
-        liquido, taxa = calcular_valor_liquido(valor, tipo)
+        liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
         if liquido is None:
             return "❌ Tipo de pagamento inválido. Exemplo: 1000,00 pix ou 2000,00 10x"
+        tipo_str = "PIX" if tipo == "pix" else tipo.upper()
+        if bandeira:
+            tipo_str = f"{bandeira.upper()} {tipo_str}"
         comprovantes.append({
             "valor_bruto": valor,
             "valor_liquido": liquido,
-            "tipo": "PIX" if tipo == "pix" else tipo.upper(),
+            "tipo": tipo_str,
             "hora": get_horario_brasilia()
         })
         return f"""📄 Comprovante analisado:
 💰 Valor bruto: {formatar_valor(valor)}
-💰 Tipo: {'PIX' if tipo == 'pix' else tipo.upper()}
+💰 Tipo: {tipo_str}
 ⏰ Horário: {get_horario_brasilia()}
 📉 Taxa aplicada: {taxa:.2f}%
 ✅ Valor líquido a pagar: {formatar_valor(liquido)}"""
@@ -321,7 +370,10 @@ def processar_mensagem(texto, user_id):
         return """🤖 *Comandos disponíveis*:
 
 📥 Enviar comprovante:
-`1000,00 pix` ou `2000,00 10x`
+`1000,00 pix`
+`1000,00 10x`
+`1000,00 elo 10x`
+`1000,00 amex 10x`
 
 📤 Solicitar pagamento:
 `solicito 300,00`
