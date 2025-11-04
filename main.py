@@ -7,15 +7,16 @@ from processador import processar_mensagem, aprova_callback, rejeita_callback, i
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 GROUP_ID = int(os.getenv("GROUP_ID", "0"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    admin_id = ADMIN_ID
-    if update.effective_chat.id == GROUP_ID:
+    group_chat_id = GROUP_ID
+    # Certifica que o valor é int
+    if update.effective_chat.id == group_chat_id:
         keyboard = [
             [
                 InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx_pendente}"),
@@ -33,18 +34,25 @@ def send_pending_comprovante(update, context, resposta, idx_pendente):
         update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def bot_menu(update, context):
+    user_id = update.effective_user.id
+    chat_type = update.effective_chat.type
+
+    # Menu para todos
     keyboard = [
         [InlineKeyboardButton("📥 Enviar Comprovante", callback_data="menu_comprovante")],
         [InlineKeyboardButton("💰 Consultar Saldo", callback_data="menu_saldo")],
         [InlineKeyboardButton("📄 Extrato - Hoje", callback_data="menu_extrato")],
         [InlineKeyboardButton("📄 Extrato - 7 dias", callback_data="menu_extrato_7")],
-        [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")],
-        [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")],
-        [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")],
         [InlineKeyboardButton("📊 Fechamento do Dia", callback_data="menu_fechamento")],
         [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
         [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
     ]
+    # Só admin e só no privado vê botões de lucro
+    if is_admin(user_id) and chat_type == "private":
+        keyboard.insert(4, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
+        keyboard.insert(5, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
+        keyboard.insert(6, [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")])
+
     markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text("📋 *Menu de Acesso Rápido*\nEscolha uma opção:", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
@@ -99,17 +107,26 @@ def button_handler(update: Update, context):
         query.answer()
         query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_lucro":
-        texto = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
-        query.answer()
-        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        if is_admin(query.from_user.id):
+            texto = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
+            query.answer()
+            query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        else:
+            query.answer("Somente admin pode ver essa opção.", show_alert=True)
     elif data == "menu_lucro_semana":
-        texto = processar_mensagem("relatorio lucro semana", query.from_user.id, get_username(query.from_user))
-        query.answer()
-        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        if is_admin(query.from_user.id):
+            texto = processar_mensagem("relatorio lucro semana", query.from_user.id, get_username(query.from_user))
+            query.answer()
+            query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        else:
+            query.answer("Somente admin pode ver essa opção.", show_alert=True)
     elif data == "menu_lucro_mes":
-        texto = processar_mensagem("relatorio lucro mes", query.from_user.id, get_username(query.from_user))
-        query.answer()
-        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        if is_admin(query.from_user.id):
+            texto = processar_mensagem("relatorio lucro mes", query.from_user.id, get_username(query.from_user))
+            query.answer()
+            query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        else:
+            query.answer("Somente admin pode ver essa opção.", show_alert=True)
     elif data == "menu_fechamento":
         texto = processar_mensagem("fechamento do dia", query.from_user.id, get_username(query.from_user))
         query.answer()
