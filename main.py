@@ -14,9 +14,7 @@ PORT = int(os.environ.get('PORT', 8443))
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    group_chat_id = GROUP_ID
-    # Certifica que o valor é int
-    if update.effective_chat.id == group_chat_id:
+    if update.effective_chat.id == GROUP_ID:
         keyboard = [
             [
                 InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx_pendente}"),
@@ -201,7 +199,9 @@ def main():
 
     dp.add_handler(CallbackQueryHandler(button_handler))
 
+    # MOTIVO DE REJEICAO SEMPRE ANTES
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
+    # Todas as outras mensagens vão para responder
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
     updater.start_webhook(
