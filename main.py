@@ -11,14 +11,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 GROUP_ID = int(os.getenv("GROUP_ID", "0"))
 PORT = int(os.environ.get('PORT', 8443))
 
-# _motivos_rejeicao espera (chat_id, msg_id, idx) => motivo depois via reply
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
     admin_id = ADMIN_ID
-    keyboard = None
-    # Só mostra botões se for no grupo e o admin está lá
-    # Botões são inline e apenas o admin pode clicar
     if update.effective_chat.id == GROUP_ID:
         keyboard = [
             [
@@ -27,7 +23,7 @@ def send_pending_comprovante(update, context, resposta, idx_pendente):
             ]
         ]
         markup = InlineKeyboardMarkup(keyboard)
-        sent = context.bot.send_message(
+        context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=resposta,
             parse_mode=ParseMode.MARKDOWN,
@@ -36,59 +32,109 @@ def send_pending_comprovante(update, context, resposta, idx_pendente):
     else:
         update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
+def bot_menu(update, context):
+    keyboard = [
+        [InlineKeyboardButton("📥 Enviar Comprovante", callback_data="menu_comprovante")],
+        [InlineKeyboardButton("💰 Consultar Saldo", callback_data="menu_saldo")],
+        [InlineKeyboardButton("📄 Extrato - Hoje", callback_data="menu_extrato")],
+        [InlineKeyboardButton("📄 Extrato - 7 dias", callback_data="menu_extrato_7")],
+        [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")],
+        [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")],
+        [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")],
+        [InlineKeyboardButton("📊 Fechamento do Dia", callback_data="menu_fechamento")],
+        [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
+        [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("📋 *Menu de Acesso Rápido*\nEscolha uma opção:", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+
 def responder(update, context):
     texto = update.message.text
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
     resposta = processar_mensagem(texto, user_id, username)
-    # Testa se resposta é comprovante pendente
+
     _idx = None
-    for k in ("aguardando confirmação", "Comprovante aguardando confirmação"):
-        if resposta and k in resposta:
+    for k in ("aguardando confirmação", "comprovante aguardando confirmação"):
+        if resposta and k in resposta.lower():
             m = re.search(r"\[(\d+)\]", resposta)
             _idx = int(m.group(1)) if m else None
             break
+    if _idx:
+        send_pending_comprovante(update, context, resposta, _idx)
+        return
 
-    if _idx and is_admin(user_id):
-        # Se admin mandou, mostra resposta e botões só para admin no grupo
-        send_pending_comprovante(update, context, resposta, _idx)
-    elif _idx:
-        # Se o lojista mandou, manda para o grupo com botões (apenas admin pode agir)
-        send_pending_comprovante(update, context, resposta, _idx)
-    else:
-        # Respostas normais
-        if resposta:
-            if resposta.strip().startswith("🤖") or resposta.strip().startswith("📈") or "*" in resposta or "`" in resposta:
-                update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-            else:
-                update.message.reply_text(resposta)
+    if resposta == "MENU_BOTAO":
+        bot_menu(update, context)
+        return
+
+    if resposta:
+        if resposta.strip().startswith("🤖") or resposta.strip().startswith("📈") or "*" in resposta or "`" in resposta:
+            update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
         else:
-            if update.message.chat.type == "private":
-                update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
+            update.message.reply_text(resposta)
+    else:
+        if update.message.chat.type == "private":
+            update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
 
 def button_handler(update: Update, context):
     query = update.callback_query
     data = query.data
     admin_id = ADMIN_ID
 
-    # Apenas admin pode agir nos botões!
-    if query.from_user.id != admin_id:
-        query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
-        return
-
-    # Aprovar fluxo
-    if data.startswith("aprovar_"):
+    # Menus principais
+    if data == "menu_comprovante":
+        query.answer()
+        query.message.reply_text("📥 Para enviar comprovante, digite:\n`1000,00 pix`\nou\n`700,00 10x`/`elo 10x`", parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_saldo":
+        texto = processar_mensagem("total liquido", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_extrato":
+        texto = processar_mensagem("extrato", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_extrato_7":
+        texto = processar_mensagem("extrato 7", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_lucro":
+        texto = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_lucro_semana":
+        texto = processar_mensagem("relatorio lucro semana", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_lucro_mes":
+        texto = processar_mensagem("relatorio lucro mes", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_fechamento":
+        texto = processar_mensagem("fechamento do dia", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_solicitar_pag":
+        query.answer()
+        query.message.reply_text("📝 Para solicitar pagamento, envie:\n`solicito 300,00`", parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_ajuda":
+        texto = processar_mensagem("ajuda", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data.startswith("aprovar_"):
         idx = int(data.split("_")[1])
+        if query.from_user.id != admin_id:
+            query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
+            return
         texto = aprova_callback(idx, query.from_user)
         query.edit_message_text(text=texto, parse_mode=ParseMode.MARKDOWN)
-        query.answer("Comprovante aprovado e saldo liberado!") 
-
-    # Rejeitar fluxo
+        query.answer("Comprovante aprovado e saldo liberado!")
     elif data.startswith("rejeitar_"):
         idx = int(data.split("_")[1])
-        # Solicitar motivo via mensagem direta
+        if query.from_user.id != admin_id:
+            query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
+            return
         query.answer()
-        # Marca o admin/main para deixar o próximo reply contar como motivo rejeição
         chat_id = query.message.chat_id
         msg_id = query.message.message_id
         _motivos_rejeicao[admin_id] = (chat_id, msg_id, idx)
@@ -104,17 +150,23 @@ def motivo_rejeicao_handler(update, context):
         try:
             context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            # Mensagem "apagada ou já editada"
             context.bot.send_message(chat_id=chat_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
         update.message.reply_text("Rejeição registrada!", parse_mode=ParseMode.MARKDOWN)
     else:
-        # Comando normal, tratativa opcional
         resposta = processar_mensagem(motivo, user_id, username)
         if resposta:
             update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def start(update, context):
-    update.message.reply_text("Olá! O bot está funcionando. Envie 'ajuda' para ver os comandos disponíveis.")
+    msg = (
+        "🤖 *GuimiCell Pagamentos Bot*\n\n"
+        "Automatize, audite e aprove comprovantes e pagamentos de forma simples e transparente!\n\n"
+        "• 📥 Envie comprovantes usando: 1000,00 pix\n"
+        "• 📄 Para acessar funções rapidamente: /menu\n"
+        "• 📊 Consulte seu saldo: total liquido\n"
+        "• 🆘 Ajuda: /ajuda"
+    )
+    update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 def ajuda(update, context):
     user_id = update.message.from_user.id
@@ -128,9 +180,12 @@ def main():
 
     dp.add_handler(CommandHandler('start', start))
     dp.add_handler(CommandHandler('ajuda', ajuda))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
+    dp.add_handler(CommandHandler('menu', bot_menu))
+
     dp.add_handler(CallbackQueryHandler(button_handler))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder)) 
+
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
     updater.start_webhook(
         listen="0.0.0.0",
