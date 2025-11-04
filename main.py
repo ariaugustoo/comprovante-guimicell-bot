@@ -35,21 +35,21 @@ def bot_menu(update, context):
     user_id = update.effective_user.id
     chat_type = update.effective_chat.type
 
-    # Menu para todos
     keyboard = [
         [InlineKeyboardButton("📥 Enviar Comprovante", callback_data="menu_comprovante")],
         [InlineKeyboardButton("💰 Consultar Saldo", callback_data="menu_saldo")],
         [InlineKeyboardButton("📄 Extrato - Hoje", callback_data="menu_extrato")],
         [InlineKeyboardButton("📄 Extrato - 7 dias", callback_data="menu_extrato_7")],
+        [InlineKeyboardButton("⏳ Listar Pendentes", callback_data="menu_listar_pendentes")],
         [InlineKeyboardButton("📊 Fechamento do Dia", callback_data="menu_fechamento")],
         [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
         [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
     ]
     # Só admin e só no privado vê botões de lucro
     if is_admin(user_id) and chat_type == "private":
-        keyboard.insert(4, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
-        keyboard.insert(5, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
-        keyboard.insert(6, [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")])
+        keyboard.insert(5, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
+        keyboard.insert(6, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
+        keyboard.insert(7, [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")])
 
     markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text("📋 *Menu de Acesso Rápido*\nEscolha uma opção:", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
@@ -102,6 +102,10 @@ def button_handler(update: Update, context):
         query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_extrato_7":
         texto = processar_mensagem("extrato 7", query.from_user.id, get_username(query.from_user))
+        query.answer()
+        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_listar_pendentes":
+        texto = processar_mensagem("listar pendentes", query.from_user.id, get_username(query.from_user))
         query.answer()
         query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_lucro":
@@ -198,10 +202,7 @@ def main():
     dp.add_handler(CommandHandler('menu', bot_menu))
 
     dp.add_handler(CallbackQueryHandler(button_handler))
-
-    # MOTIVO DE REJEICAO SEMPRE ANTES
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
-    # Todas as outras mensagens vão para responder
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
 
     updater.start_webhook(
