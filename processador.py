@@ -155,10 +155,14 @@ def listar_pagamentos(dia=None):
 def listar_pendentes():
     if not comprovantes_pendentes:
         return "⏳ *Nenhum comprovante pendente aguardando aprovação.*"
-    linhas = ["⏳ *Comprovantes pendentes (aguardam conferência do admin):*"]
+    linhas = ["⏳ *Pendentes aguardando conferência:*"]
     for idx, c in enumerate(comprovantes_pendentes, start=1):
         linhas.append(
-            f"`[{idx}]` {formatar_valor(c['valor_bruto'])} → Líq: {formatar_valor(c['valor_liquido'])} - {c['tipo']} - {c['hora']}/{c['data']}"
+            f"{idx}️⃣ [Pendente]\n"
+            f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+            f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+            f"💳 Tipo: {c['tipo']}\n"
+            f"⏰ Hora: {c['hora']}\n"
         )
     return "\n".join(linhas)
 
@@ -300,33 +304,32 @@ def extrato_visual(periodo="hoje"):
     def dentro(dt):
         return data_inicial <= dt <= data_final
 
-    linhas = []
-    linhas.append(f"📄 *Extrato Detalhado* — {titulo_periodo}\n")
-    linhas.append("Nº | Bruto     | Líq     | Tipo        | Situação     | Hora")
-    linhas.append("---|-----------|---------|-------------|--------------|------")
-    todas = []
-
+    linhas = [f"📄 *Extrato Detalhado — {titulo_periodo}*"]
     for idx, c in enumerate([x for x in comprovantes if dentro(x["data"])], start=1):
-        todas.append((
-            c["hora"],
-            f"{idx}  | {formatar_valor(c['valor_bruto']):<9}| {formatar_valor(c['valor_liquido']):<7}| {c['tipo']:<11}| {'Aprovado':<12}| {c['hora']}"
-        ))
-    for idx, c in enumerate([x for x in comprovantes_pendentes if dentro(x["data"])], start=1):
-        todas.append((
-            c["hora"],
-            f"-   | {formatar_valor(c['valor_bruto']):<9}| {formatar_valor(c['valor_liquido']):<7}| {c['tipo']:<11}| {'Pendente':<12}| {c['hora']}"
-        ))
-    for idx, p in enumerate([x for x in pagamentos if dentro(x["data"])], start=1):
-        todas.append((
-            p["hora"],
-            f"-   | {'-'*9} | {formatar_valor(p['valor']):<7}| {'Pagamento':<11}| {'Pago':<12}| {p['hora']}"
-        ))
-    todas.sort(key=lambda t: t[0])
-    for _, linha in todas:
-        linhas.append(linha)
-    if len(linhas) == 3:
+        linhas.append(
+            f"{idx}️⃣ [Aprovado]\n"
+            f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+            f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+            f"💳 Tipo: {c['tipo']}\n"
+            f"⏰ Hora: {c['hora']}"
+        )
+    for c in [x for x in comprovantes_pendentes if dentro(x["data"])]:
+        linhas.append(
+            f"⏳ [Pendente]\n"
+            f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+            f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+            f"💳 Tipo: {c['tipo']}\n"
+            f"⏰ Hora: {c['hora']}"
+        )
+    for p in [x for x in pagamentos if dentro(x["data"])]:
+        linhas.append(
+            f"💵 [Pagamento feito]\n"
+            f"🏷 Valor: {formatar_valor(p['valor'])}\n"
+            f"⏰ Hora: {p['hora']}"
+        )
+    if len(linhas) == 1:
         linhas.append("_Nenhum lançamento no período._")
-    return "\n".join(linhas)
+    return "\n\n".join(linhas)
 
 def aprova_callback(idx, admin_user):
     return aprovar_pendente(idx, get_username(admin_user))
@@ -353,7 +356,6 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     if texto == "listar pendentes" and admin:
         return listar_pendentes()
 
-    # >>> Ajuste para aprovar por comando texto <<<
     if texto.startswith("aprovar") and admin:
         partes = shlex.split(texto)
         if len(partes) < 2:
