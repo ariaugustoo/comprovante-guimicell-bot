@@ -351,7 +351,7 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
         return extrato_visual("hoje")
 
     if texto == "meu id":
-        return f"🤖 Seu user_id: `{user_id}`"
+        return f"Seu user_id: {user_id}\nEste chat_id: {username}"
 
     # -- RELATORIO LUCRO --
     if texto.startswith("relatorio lucro") and admin:
