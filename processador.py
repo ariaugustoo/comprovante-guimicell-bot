@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import shlex
 
@@ -15,7 +15,6 @@ def is_admin(user_id):
     return str(user_id) == str(os.getenv("ADMIN_ID", "0"))
 
 def get_username(context_user):
-    # Preferência para nome de usuário, depois nome, depois ID
     return f"@{getattr(context_user, 'username', None) or getattr(context_user, 'first_name', None) or str(getattr(context_user, 'id', '-'))}"
 
 taxas_elo = {1: 5.12, 2: 6.22, 3: 6.93, 4: 7.64, 5: 8.35, 6: 9.07, 7: 10.07, 8: 10.92, 9: 11.63, 10: 12.34, 11: 13.05, 12: 13.76, 13: 14.47, 14: 15.17, 15: 15.88, 16: 16.59, 17: 17.30, 18: 18.01}
@@ -36,6 +35,10 @@ def get_data_hora_brasilia():
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
     return agora.strftime('%H:%M'), agora.strftime('%Y-%m-%d')
+
+def get_data_hoje():
+    fuso = pytz.timezone('America/Sao_Paulo')
+    return datetime.now(fuso).strftime('%Y-%m-%d')
 
 VALOR_BRL_REGEX = r"(\d{1,3}(?:\.\d{3})*,\d{2})"
 def normalizar_valor(texto):
@@ -77,13 +80,10 @@ def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
         parcelas = int(re.sub(r'\D', '', tipo))
         if bandeira == "elo":
             taxa = taxas_elo.get(parcelas, 0)
-            taxa_maquina = taxas_reais_elo.get(parcelas, 0)
         elif bandeira == "amex":
             taxa = taxas_amex.get(parcelas, 0)
-            taxa_maquina = taxas_reais_amex.get(parcelas, 0)
         else:
             taxa = taxas_cartao.get(parcelas, 0)
-            taxa_maquina = taxas_reais_cartao.get(parcelas, 0)
         if taxa == 0:
             return None, None
         liquido = valor * (1 - taxa / 100)
@@ -185,12 +185,32 @@ def rejeitar_pendente(indice, admin_name, motivo):
     except Exception:
         return "❌ Erro ao rejeitar. Exemplo: rejeitar 1 <motivo>"
 
-def relatorio_lucro(dia=None):
+def relatorio_lucro(periodo="dia"):
+    fuso = pytz.timezone('America/Sao_Paulo')
+    dt_now = datetime.now(fuso)
+    if periodo == "dia":
+        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do dia {data_ini}"
+    elif periodo == "semana":
+        data_fim = dt_now.strftime('%Y-%m-%d')
+        data_ini = (dt_now - timedelta(days=6)).strftime('%Y-%m-%d')
+        titulo = f"Lucro da semana ({data_ini} a {data_fim})"
+    elif periodo == "mes":
+        data_ini = dt_now.replace(day=1).strftime('%Y-%m-%d')
+        data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do mês ({data_ini} a {data_fim})"
+    else:
+        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do dia {data_ini}"
+
+    def dentro(data):
+        return data_ini <= data <= data_fim
+
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
     total_lucro_pix = total_lucro_cartao = 0.0
 
-    for c in ([x for x in comprovantes if not dia or x["data"] == dia]):
+    for c in (x for x in comprovantes if dentro(x["data"])):
         valor = c["valor_bruto"]
         tipo = c["tipo"]
         liquido_loja = c["valor_liquido"]
@@ -234,7 +254,7 @@ def relatorio_lucro(dia=None):
     total_liquido = total_liquido_pix + total_liquido_cartao
     total_lucro = total_lucro_pix + total_lucro_cartao
 
-    return f"""📈 *Relatório de Lucro Diário*
+    return f"""📈 *{titulo}*
 
 *PIX:*
  • Bruto: `{formatar_valor(total_bruto_pix)}`
@@ -254,37 +274,7 @@ def relatorio_lucro(dia=None):
 
 def fechamento_do_dia():
     _, hoje = get_data_hora_brasilia()
-    comps_hoje = [c for c in comprovantes if c['data'] == hoje]
-    pays_hoje = [p for p in pagamentos if p["data"] == hoje]
-    total_pix = sum(c["valor_liquido"] for c in comps_hoje if c["tipo"] == "PIX")
-    total_cartao = sum(c["valor_liquido"] for c in comps_hoje if c["tipo"] != "PIX")
-    total_pago = sum(p["valor"] for p in pays_hoje)
-    pendente = (total_pix + total_cartao) - total_pago
-    if pendente < 0: pendente = 0
-
-    detalhes = "\n".join([
-        f"- {formatar_valor(c['valor_bruto'])} ➔ Líq: {formatar_valor(c['valor_liquido'])} - {c['tipo']} ({c['hora']})"
-        for c in comps_hoje
-    ]) or "_Nenhum comprovante aprovado no dia._"
-
-    pagamentos_linha = "\n".join([
-        f"- {formatar_valor(p['valor'])} ({p['hora']})"
-        for p in pays_hoje
-    ]) or "_Nenhum pagamento realizado no dia._"
-
-    return f"""📅 *Fechamento do Dia: {hoje}*
-
-💳 Cartão (aprovado hoje): `{formatar_valor(total_cartao)}`
-💸 Pix (aprovado hoje): `{formatar_valor(total_pix)}`
-✅ Pago no dia: `{formatar_valor(total_pago)}`
-📌 Saldo do dia: `{formatar_valor(pendente)}`
-
-*Comprovantes aprovados do dia:*
-{detalhes}
-
-*Pagamentos realizados do dia:*
-{pagamentos_linha}
-"""
+    return extrato_visual("hoje")
 
 def zerar_saldos():
     comprovantes.clear()
@@ -292,18 +282,52 @@ def zerar_saldos():
     solicitacoes.clear()
     return "✅ *Fechamento realizado.* Saldos de cartão e pix zerados (saldo anterior permanece; consulte comando `total liquido`)."
 
-def extrato_do_dia():
-    _, hoje = get_data_hora_brasilia()
+def extrato_visual(periodo="hoje"):
+    fuso = pytz.timezone('America/Sao_Paulo')
+    hoje = datetime.now(fuso).strftime('%Y-%m-%d')
+    if periodo == "hoje":
+        data_inicial = data_final = hoje
+        titulo_periodo = hoje
+    elif periodo == "7dias":
+        dt = datetime.now(fuso)
+        data_final = dt.strftime('%Y-%m-%d')
+        data_inicial = (dt - timedelta(days=6)).strftime('%Y-%m-%d')
+        titulo_periodo = f"{data_inicial} a {data_final}"
+    else:
+        data_inicial = data_final = hoje
+        titulo_periodo = hoje
+
+    def dentro(dt):
+        return data_inicial <= dt <= data_final
+
     linhas = []
-    linhas.append("📄 *Extrato detalhado do dia:*")
-    for acao in log_operacoes:
-        if hoje in acao:
-            linhas.append(acao)
-    if not linhas[1:]:
-        return "📄 Nada registrado hoje ainda."
+    linhas.append(f"📄 *Extrato Detalhado* — {titulo_periodo}\n")
+    linhas.append("Nº | Bruto     | Líq     | Tipo        | Situação     | Hora")
+    linhas.append("---|-----------|---------|-------------|--------------|------")
+    todas = []
+
+    for idx, c in enumerate([x for x in comprovantes if dentro(x["data"])], start=1):
+        todas.append((
+            c["hora"],
+            f"{idx}  | {formatar_valor(c['valor_bruto']):<9}| {formatar_valor(c['valor_liquido']):<7}| {c['tipo']:<11}| {'Aprovado':<12}| {c['hora']}"
+        ))
+    for idx, c in enumerate([x for x in comprovantes_pendentes if dentro(x["data"])], start=1):
+        todas.append((
+            c["hora"],
+            f"-   | {formatar_valor(c['valor_bruto']):<9}| {formatar_valor(c['valor_liquido']):<7}| {c['tipo']:<11}| {'Pendente':<12}| {c['hora']}"
+        ))
+    for idx, p in enumerate([x for x in pagamentos if dentro(x["data"])], start=1):
+        todas.append((
+            p["hora"],
+            f"-   | {'-'*9} | {formatar_valor(p['valor']):<7}| {'Pagamento':<11}| {'Pago':<12}| {p['hora']}"
+        ))
+    todas.sort(key=lambda t: t[0])
+    for _, linha in todas:
+        linhas.append(linha)
+    if len(linhas) == 3:
+        linhas.append("_Nenhum lançamento no período._")
     return "\n".join(linhas)
 
-# NOVOS HANDLERS PARA USO DE BOTOES
 def aprova_callback(idx, admin_user):
     return aprovar_pendente(idx, get_username(admin_user))
 
@@ -311,17 +335,33 @@ def rejeita_callback(idx, admin_user, motivo):
     return rejeitar_pendente(idx, get_username(admin_user), motivo)
 
 def processar_mensagem(texto, user_id, username="ADMIN"):
-    texto = texto.strip()
+    texto = texto.strip().lower()
     admin = is_admin(user_id)
     hora, data = get_data_hora_brasilia()
 
+    if texto == "/menu" or texto == "menu":
+        return "MENU_BOTAO"
+
+    if texto == "extrato" or texto == "/extrato":
+        return extrato_visual("hoje")
+    if "7" in texto and "extrato" in texto:
+        return extrato_visual("7dias")
+
     if texto == "extrato do dia":
-        return extrato_do_dia()
+        return extrato_visual("hoje")
 
     if texto == "meu id":
         return f"🤖 Seu user_id: `{user_id}`"
 
-    # ADMIN por comando
+    # -- RELATORIO LUCRO --
+    if texto.startswith("relatorio lucro") and admin:
+        if "semana" in texto:
+            return relatorio_lucro("semana")
+        elif "mes" in texto:
+            return relatorio_lucro("mes")
+        else:
+            return relatorio_lucro("dia")
+
     if texto.startswith("corrigir valor") and admin:
         try:
             partes = shlex.split(texto)
@@ -338,10 +378,6 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     if texto == "listar pagamentos" and admin:
         return listar_pagamentos()
 
-    if texto == "relatorio lucro" and admin:
-        _, hoje = get_data_hora_brasilia()
-        return relatorio_lucro(hoje)
-
     if texto == "config taxa" and admin:
         return "⚙️ *Para alterar taxas, edite diretamente no código ou peça uma função personalizada!*"
 
@@ -356,7 +392,6 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     if texto == "fechamento diário" and admin:
         return zerar_saldos()
 
-    # Comprovante - Envio (pendente)
     valor, tipo, bandeira = extrair_valor_tipo_bandeira(texto)
     if valor and tipo:
         liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
@@ -430,13 +465,12 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
         return f"✅ *Total pago até agora:* `{formatar_valor(total)}`"
 
     if texto == "fechamento do dia":
-        return fechamento_do_dia()
-
-    if texto == "extrato do dia":
-        return extrato_do_dia()
+        return extrato_visual("hoje")
 
     if texto == "ajuda":
         return """🤖 *Comandos disponíveis*:
+
+📋 Use /menu ou envie "menu" para acessar os botões de atalho!
 
 📥 *Enviar comprovante para conferência (aprovado pelo admin):*
 • `1000,00 pix`
@@ -462,15 +496,11 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
 • total liquido
 • pagamentos realizados
 • fechamento do dia
-• extrato do dia
-• meu id
-
-🔒 *Admin (privado):*
-• listar comprovantes
-• listar pagamentos
+• extrato
+• extrato 7dias
 • relatorio lucro
-• fechamento diário
-• limpar tudo
-• extrato do dia
+• relatorio lucro semana
+• relatorio lucro mes
+• meu id
 """
     return None
