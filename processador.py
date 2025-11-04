@@ -350,10 +350,27 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     if texto == "extrato do dia":
         return extrato_visual("hoje")
 
+    if texto == "listar pendentes" and admin:
+        return listar_pendentes()
+
+    # >>> Ajuste para aprovar por comando texto <<<
+    if texto.startswith("aprovar") and admin:
+        partes = shlex.split(texto)
+        if len(partes) < 2:
+            return "❌ Use: aprovar <número do pendente>."
+        idx = partes[1]
+        return aprovar_pendente(idx, username)
+
+    if texto.startswith("rejeitar") and admin:
+        partes = shlex.split(texto)
+        if len(partes) < 3:
+            return "❌ Use: rejeitar <número> <motivo>."
+        idx, motivo = partes[1], " ".join(partes[2:])
+        return rejeitar_pendente(idx, username, motivo)
+
     if texto == "meu id":
         return f"Seu user_id: {user_id}\nEste chat_id: {username}"
 
-    # -- RELATORIO LUCRO --
     if texto.startswith("relatorio lucro") and admin:
         if "semana" in texto:
             return relatorio_lucro("semana")
