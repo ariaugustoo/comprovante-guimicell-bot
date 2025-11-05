@@ -14,7 +14,8 @@ PORT = int(os.environ.get('PORT', 8443))
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    if update.effective_chat.id == GROUP_ID:
+    # Comparação robusta de id como string para evitar bug de tipo
+    if str(update.effective_chat.id) == str(GROUP_ID):
         keyboard = [
             [
                 InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx_pendente}"),
@@ -167,14 +168,17 @@ def motivo_rejeicao_handler(update, context):
         chat_id, msg_id, idx = _motivos_rejeicao.pop(user_id)
         resposta = rejeita_callback(idx, update.message.from_user, motivo)
         try:
-            context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
+            # NÃO use parse_mode porque pode quebrar por caracteres especiais vindos do usuário
+            context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
         except Exception:
-            context.bot.send_message(chat_id=chat_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
-        update.message.reply_text("Rejeição registrada!", parse_mode=ParseMode.MARKDOWN)
+            context.bot.send_message(chat_id=chat_id, text=resposta)
+        update.message.reply_text("Rejeição registrada!") # apenas texto puro
     else:
         resposta = processar_mensagem(motivo, user_id, username)
-        if resposta:
+        try:
             update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            update.message.reply_text(resposta)
 
 def start(update, context):
     msg = (
