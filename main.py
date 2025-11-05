@@ -14,7 +14,7 @@ PORT = int(os.environ.get('PORT', 8443))
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    # [OPÇÃO 1: PRINT PARA LOG DEBUG]
+    # [LOG DEBUG]
     print("DEBUG CHAT_ID:", update.effective_chat.id, "(type:", type(update.effective_chat.id), ") / GROUP_ID do .env:", os.getenv("GROUP_ID"), "(type:", type(os.getenv("GROUP_ID")), ")")
     
     if str(update.effective_chat.id) == str(os.getenv("GROUP_ID")):
@@ -201,6 +201,7 @@ def ajuda(update, context):
     update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def main():
+    print("==== Bot foi iniciado e está rodando ====")
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
