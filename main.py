@@ -14,8 +14,10 @@ PORT = int(os.environ.get('PORT', 8443))
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    # Comparação robusta de id como string para evitar bug de tipo
-    if str(update.effective_chat.id) == str(GROUP_ID):
+    # [OPÇÃO 1: PRINT PARA LOG DEBUG]
+    print("DEBUG CHAT_ID:", update.effective_chat.id, "(type:", type(update.effective_chat.id), ") / GROUP_ID do .env:", os.getenv("GROUP_ID"), "(type:", type(os.getenv("GROUP_ID")), ")")
+    
+    if str(update.effective_chat.id) == str(os.getenv("GROUP_ID")):
         keyboard = [
             [
                 InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx_pendente}"),
@@ -64,6 +66,7 @@ def responder(update, context):
     _idx = None
     for k in ("aguardando confirmação", "comprovante aguardando confirmação"):
         if resposta and k in resposta.lower():
+            import re
             m = re.search(r"\[(\d+)\]", resposta)
             _idx = int(m.group(1)) if m else None
             break
