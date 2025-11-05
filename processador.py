@@ -95,6 +95,10 @@ def registrar_acao(tipo, user_name, texto):
     hora, data = get_data_hora_brasilia()
     log_operacoes.append(f"{hora}/{data} - [{tipo}] {user_name}: {texto}")
 
+def limpar_pendentes():
+    comprovantes_pendentes.clear()
+    return "✅ Todos os comprovantes pendentes foram removidos com sucesso."
+
 def listar_pendentes():
     if not comprovantes_pendentes:
         return "⏳ *Nenhum comprovante pendente aguardando aprovação.*"
@@ -112,7 +116,7 @@ def listar_pendentes():
 def aprovar_pendente(comp_id, admin_name):
     idx = next((i for i, c in enumerate(comprovantes_pendentes) if c["id"] == comp_id), None)
     if idx is None:
-        return "❌ ID do pendente inválido."
+        return "❌ Esse comprovante já foi aprovado/rejeitado ou não está mais pendente."
     comp = comprovantes_pendentes.pop(idx)
     comprovantes.append(comp)
     registrar_acao('APROVAÇÃO', admin_name, f"Aprovou [{comp_id}]: {formatar_valor(comp['valor_bruto'])} ({comp['tipo']})")
@@ -121,7 +125,7 @@ def aprovar_pendente(comp_id, admin_name):
 def rejeitar_pendente(comp_id, admin_name, motivo):
     idx = next((i for i, c in enumerate(comprovantes_pendentes) if c["id"] == comp_id), None)
     if idx is None:
-        return "❌ ID do pendente inválido."
+        return "❌ Esse comprovante já foi aprovado/rejeitado ou não está mais pendente."
     comp = comprovantes_pendentes.pop(idx)
     registrar_acao('REJEIÇÃO', admin_name, f"Rejeitou [{comp_id}] ({comp['tipo']}) {formatar_valor(comp['valor_bruto'])}. Motivo: {motivo}")
     return f"🚫 [{admin_name}] rejeitou:\n`{formatar_valor(comp['valor_bruto'])} ({comp['tipo']}) - Líq: {formatar_valor(comp['valor_liquido'])}`\nMotivo: {motivo}"
@@ -136,6 +140,9 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     texto = texto.strip().lower()
     admin = is_admin(user_id)
     hora, data = get_data_hora_brasilia()
+
+    if texto == "limpar pendentes" and admin:
+        return limpar_pendentes()
 
     if texto in ["/menu", "menu"]:
         return "MENU_BOTAO"
@@ -190,11 +197,40 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
         return f"💰 *Valor líquido disponível (apenas aprovados, já descontados pagamentos):* `{formatar_valor(total_liquido)}`"
 
     if texto == "ajuda":
-        return "*Comandos principais:*\n"\
-            "• Envie comprovante: `1000,00 pix` (ou cartões)\n"\
-            "• Ver pendentes: `listar pendentes`\n"\
-            "• Aprovar: `aprovar <ID>` (admin)\n"\
-            "• Rejeitar: `rejeitar <ID> <motivo>` (admin)\n"\
-            "• Consultar saldo: `total liquido`\n"
+        return """🤖 *Comandos disponíveis*:
+
+📋 Use /menu ou envie "menu" para acessar os botões de atalho!
+
+📥 *Enviar comprovante para conferência (aprovado pelo admin):*
+• `1000,00 pix`
+• `1000,00 10x` ou `1000,00 elo 10x` ou `1000,00 amex 10x`
+
+⏸️ *Consultar pendentes de conferência:*
+• *Admin*: `listar pendentes`
+
+☑️ *Aprovar ou rejeitar (admin ou botão do bot):*
+ • `aprovar <ID>`
+ • `rejeitar <ID> <motivo>`
+
+🔄 *Corrigir comprovante (admin):*
+ • `corrigir valor <ID> 1200,00 12x`
+
+📤 *Solicitar pagamento:*
+• `solicito 300,00`
+
+✅ *Confirmar pagamento:*
+• `pagamento feito` ou `pagamento feito 300,00`
+
+📊 *Consultas:*
+• `total liquido`
+• `pagamentos realizados`
+• `fechamento do dia`
+• `extrato`
+• `extrato 7dias`
+• `relatorio lucro`
+• `relatorio lucro semana`
+• `relatorio lucro mes`
+• `meu id`
+"""
 
     return None
