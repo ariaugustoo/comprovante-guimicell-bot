@@ -3,7 +3,6 @@ import re
 import uuid
 from datetime import datetime, timedelta
 import pytz
-import shlex
 
 log_operacoes = []
 
@@ -25,7 +24,6 @@ taxas_reais_amex = {1: 4.17, 2: 4.96, 3: 5.68, 4: 6.39, 5: 7.11, 6: 7.82, 7: 8.6
 taxas_cartao = {1: 4.39, 2: 5.19, 3: 6.19, 4: 6.59, 5: 7.19, 6: 8.29, 7: 9.19, 8: 9.99, 9: 10.29, 10: 10.88, 11: 11.99, 12: 12.52, 13: 13.69, 14: 14.19, 15: 14.69, 16: 15.19, 17: 15.89, 18: 16.84}
 taxas_reais_cartao = {1: 3.28, 2: 3.96, 3: 4.68, 4: 5.40, 5: 6.12, 6: 6.84, 7: 7.72, 8: 8.44, 9: 9.16, 10: 9.88, 11: 10.60, 12: 11.32, 13: 12.04, 14: 12.76, 15: 13.48, 16: 14.20, 17: 14.92, 18: 15.64}
 taxa_pix = 0.20
-taxa_real_pix = 0.00
 
 def formatar_valor(valor):
     try: valor = float(valor)
