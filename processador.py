@@ -3,7 +3,6 @@ import re
 import uuid
 from datetime import datetime, timedelta
 import pytz
-import shlex
 
 log_operacoes = []
 
@@ -34,6 +33,7 @@ def formatar_valor(valor):
 def get_data_hora_brasilia():
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
+    # Hora HH:MM, Data DD/MM/YYYY
     return agora.strftime('%H:%M'), agora.strftime('%d/%m/%Y')
 
 VALOR_BRL_REGEX = r"(\d{1,3}(?:\.\d{3})*,\d{2})"
@@ -108,7 +108,7 @@ def listar_pendentes():
             f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
             f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
             f"💳 Tipo: {c['tipo']}\n"
-            f"⏰ Hora: {c['hora']}\n"
+            f"⏰ Hora: {c['hora']} {c['data']}\n"
         )
     return "\n".join(linhas)
 
@@ -139,21 +139,25 @@ def rejeita_callback(comp_id, admin_user, motivo):
 
 def extrato_visual(periodo="hoje"):
     fuso = pytz.timezone('America/Sao_Paulo')
-    hoje = datetime.now(fuso).strftime('%Y-%m-%d')
+    hoje = datetime.now(fuso).strftime('%d/%m/%Y')
     if periodo == "hoje":
         data_inicial = data_final = hoje
         titulo_periodo = hoje
     elif "7" in periodo:
         dt = datetime.now(fuso)
-        data_final = dt.strftime('%Y-%m-%d')
-        data_inicial = (dt - timedelta(days=6)).strftime('%Y-%m-%d')
+        data_final = dt.strftime('%d/%m/%Y')
+        data_inicial = (dt - timedelta(days=6)).strftime('%d/%m/%Y')
         titulo_periodo = f"{data_inicial} a {data_final}"
     else:
         data_inicial = data_final = hoje
         titulo_periodo = hoje
 
     def dentro(dt):
-        return data_inicial <= dt <= data_final
+        # dt: string 'dd/mm/yyyy'
+        dt_obj = datetime.strptime(dt, "%d/%m/%Y")
+        ini = datetime.strptime(data_inicial, "%d/%m/%Y")
+        fim = datetime.strptime(data_final, "%d/%m/%Y")
+        return ini <= dt_obj <= fim
 
     linhas = [f"📄 *Extrato Detalhado — {titulo_periodo}*"]
     for idx, c in enumerate([x for x in comprovantes if dentro(x["data"])], start=1):
@@ -162,7 +166,7 @@ def extrato_visual(periodo="hoje"):
             f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
             f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
             f"💳 Tipo: {c['tipo']}\n"
-            f"⏰ Hora: {c['hora']}"
+            f"⏰ Hora: {c['hora']} {c['data']}"
         )
     for c in [x for x in comprovantes_pendentes if dentro(x["data"])]:
         linhas.append(
@@ -170,13 +174,13 @@ def extrato_visual(periodo="hoje"):
             f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
             f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
             f"💳 Tipo: {c['tipo']}\n"
-            f"⏰ Hora: {c['hora']}"
+            f"⏰ Hora: {c['hora']} {c['data']}"
         )
     for p in [x for x in pagamentos if dentro(x["data"])]:
         linhas.append(
             f"💵 [Pagamento feito]\n"
             f"🏷 Valor: {formatar_valor(p['valor'])}\n"
-            f"⏰ Hora: {p['hora']}"
+            f"⏰ Hora: {p['hora']} {p['data']}"
         )
     if len(linhas) == 1:
         linhas.append("_Nenhum lançamento no período._")
@@ -185,23 +189,27 @@ def extrato_visual(periodo="hoje"):
 def relatorio_lucro(periodo="dia"):
     fuso = pytz.timezone('America/Sao_Paulo')
     dt_now = datetime.now(fuso)
+    data_format = "%d/%m/%Y"
     if periodo == "dia":
-        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        data_ini = data_fim = dt_now.strftime(data_format)
         titulo = f"Lucro do dia {data_ini}"
     elif periodo == "semana":
-        data_fim = dt_now.strftime('%Y-%m-%d')
-        data_ini = (dt_now - timedelta(days=6)).strftime('%Y-%m-%d')
+        data_fim = dt_now.strftime(data_format)
+        data_ini = (dt_now - timedelta(days=6)).strftime(data_format)
         titulo = f"Lucro da semana ({data_ini} a {data_fim})"
     elif periodo == "mes":
-        data_ini = dt_now.replace(day=1).strftime('%Y-%m-%d')
-        data_fim = dt_now.strftime('%Y-%m-%d')
+        data_ini = dt_now.replace(day=1).strftime(data_format)
+        data_fim = dt_now.strftime(data_format)
         titulo = f"Lucro do mês ({data_ini} a {data_fim})"
     else:
-        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        data_ini = data_fim = dt_now.strftime(data_format)
         titulo = f"Lucro do dia {data_ini}"
 
     def dentro(data):
-        return data_ini <= data <= data_fim
+        dt_obj = datetime.strptime(data, "%d/%m/%Y")
+        ini = datetime.strptime(data_ini, "%d/%m/%Y")
+        fim = datetime.strptime(data_fim, "%d/%m/%Y")
+        return ini <= dt_obj <= fim
 
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
@@ -426,7 +434,7 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
         registrar_acao("PAGAMENTO", username, f"Pagou {formatar_valor(valor)} (Saldo antes: {formatar_valor(saldo_anterior)})")
         return f"""✅ *Pagamento registrado com sucesso!*
 💵 Valor: `{formatar_valor(valor)}`
-📉 Saldo anterior: `{formatar_valor(saldo_anterior)}`
+📉 Saldo anterior: `{formatar_valor(saldo_anterior)}` 
 💰 Novo saldo disponível: `{formatar_valor(novo_saldo)}`"""
 
     if texto == "meu id":
