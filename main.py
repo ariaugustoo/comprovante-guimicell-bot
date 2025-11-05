@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram import ParseMode, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from processador import processar_mensagem, aprova_callback, rejeita_callback, is_admin, get_username
+from processador import processar_mensagem, aprova_callback, rejeita_callback, is_admin, get_username, comprovantes_pendentes, formatar_valor
 
 load_dotenv()
 
@@ -14,9 +14,8 @@ PORT = int(os.environ.get('PORT', 8443))
 _motivos_rejeicao = {}
 
 def send_pending_comprovante(update, context, resposta, idx_pendente):
-    # [LOG DEBUG]
     print("DEBUG CHAT_ID:", update.effective_chat.id, "(type:", type(update.effective_chat.id), ") / GROUP_ID do .env:", os.getenv("GROUP_ID"), "(type:", type(os.getenv("GROUP_ID")), ")")
-    
+
     if str(update.effective_chat.id) == str(os.getenv("GROUP_ID")):
         keyboard = [
             [
@@ -48,7 +47,6 @@ def bot_menu(update, context):
         [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
         [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
     ]
-    # Só admin e só no privado vê botões de lucro
     if is_admin(user_id) and chat_type == "private":
         keyboard.insert(5, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
         keyboard.insert(6, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
@@ -58,6 +56,7 @@ def bot_menu(update, context):
     update.message.reply_text("📋 *Menu de Acesso Rápido*\nEscolha uma opção:", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
 def responder(update, context):
+    import re
     texto = update.message.text
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
@@ -66,7 +65,6 @@ def responder(update, context):
     _idx = None
     for k in ("aguardando confirmação", "comprovante aguardando confirmação"):
         if resposta and k in resposta.lower():
-            import re
             m = re.search(r"\[(\d+)\]", resposta)
             _idx = int(m.group(1)) if m else None
             break
@@ -92,7 +90,6 @@ def button_handler(update: Update, context):
     data = query.data
     admin_id = ADMIN_ID
 
-    # Menus principais
     if data == "menu_comprovante":
         query.answer()
         query.message.reply_text("📥 Para enviar comprovante, digite:\n`1000,00 pix`\nou\n`700,00 10x`/`elo 10x`", parse_mode=ParseMode.MARKDOWN)
@@ -109,9 +106,26 @@ def button_handler(update: Update, context):
         query.answer()
         query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_listar_pendentes":
-        texto = processar_mensagem("listar pendentes", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+        if not comprovantes_pendentes:
+            query.message.reply_text("⏳ *Nenhum comprovante pendente aguardando aprovação.*", parse_mode=ParseMode.MARKDOWN)
+        else:
+            for idx, c in enumerate(comprovantes_pendentes, start=1):
+                texto = (
+                    f"{idx}️⃣ [Pendente]\n"
+                    f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+                    f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+                    f"💳 Tipo: {c['tipo']}\n"
+                    f"⏰ Hora: {c['hora']}"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx}"),
+                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{idx}")
+                    ]
+                ]
+                markup = InlineKeyboardMarkup(keyboard)
+                query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
     elif data == "menu_lucro":
         if is_admin(query.from_user.id):
             texto = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
@@ -171,11 +185,10 @@ def motivo_rejeicao_handler(update, context):
         chat_id, msg_id, idx = _motivos_rejeicao.pop(user_id)
         resposta = rejeita_callback(idx, update.message.from_user, motivo)
         try:
-            # NÃO use parse_mode porque pode quebrar por caracteres especiais vindos do usuário
             context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
         except Exception:
             context.bot.send_message(chat_id=chat_id, text=resposta)
-        update.message.reply_text("Rejeição registrada!") # apenas texto puro
+        update.message.reply_text("Rejeição registrada!")
     else:
         resposta = processar_mensagem(motivo, user_id, username)
         try:
