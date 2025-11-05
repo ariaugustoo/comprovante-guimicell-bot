@@ -60,8 +60,36 @@ def responder(update, context):
     texto = update.message.text
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
-    resposta = processar_mensagem(texto, user_id, username)
 
+    # FAZ O AJUSTE: se o comando for "listar pendentes", manda igual ao menu, com cada pendente numa mensagem separada com botões!
+    if texto.lower().strip() == "listar pendentes":
+        if not comprovantes_pendentes:
+            update.message.reply_text("⏳ *Nenhum comprovante pendente aguardando aprovação.*", parse_mode=ParseMode.MARKDOWN)
+        else:
+            for idx, c in enumerate(comprovantes_pendentes, start=1):
+                txt = (
+                    f"{idx}️⃣ [Pendente]\n"
+                    f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+                    f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+                    f"💳 Tipo: {c['tipo']}\n"
+                    f"⏰ Hora: {c['hora']}"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx}"),
+                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{idx}")
+                    ]
+                ]
+                markup = InlineKeyboardMarkup(keyboard)
+                context.bot.send_message(
+                    chat_id=update.message.chat_id,
+                    text=txt,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=markup
+                )
+        return
+
+    resposta = processar_mensagem(texto, user_id, username)
     _idx = None
     for k in ("aguardando confirmação", "comprovante aguardando confirmação"):
         if resposta and k in resposta.lower():
@@ -125,7 +153,6 @@ def button_handler(update: Update, context):
                     ]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
-                # ENVIA CADA PENDENTE EM UMA MENSAGEM SEPARADA!!
                 context.bot.send_message(
                     chat_id=query.message.chat_id,
                     text=texto,
