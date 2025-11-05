@@ -20,12 +20,11 @@ PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
 
-def send_pending_comprovante(update, context, resposta, comp_idx=None):
-    # comp_idx é o índice (em string) na lista do processador, se usado!
+def send_pending_comprovante(update, context, resposta, comp_id=None):
     keyboard = [
         [
-            InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{comp_idx if comp_idx else ''}"),
-            InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{comp_idx if comp_idx else ''}")
+            InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{comp_id}"),
+            InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{comp_id}")
         ]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -69,21 +68,21 @@ def responder(update, context):
     username = get_username(update.message.from_user)
     resposta = processar_mensagem(texto, user_id, username)
 
-    # Checa se vem índice no padrão [1] e mensagem de pendente
-    m = re.search(r"\[(\d+)\]", str(resposta or ""))
+    # Se resposta contém novo comprovante pendente (ID#UUID)
+    m = re.search(r'ID#([a-f0-9\-]+)', str(resposta or ""))
     if m and "aguardando confirmação" in str(resposta or "").lower():
-        idx = m.group(1)
-        send_pending_comprovante(update, context, resposta, idx)
+        comp_id = m.group(1)
+        send_pending_comprovante(update, context, resposta, comp_id)
         return
 
-    # "listar pendentes": mostra via botões
+    # Listar pendentes: mostra via botões, cada um pelo id
     if texto.lower().replace(" ", "") in ["listarpendentes", "pendentes"]:
         if not comprovantes_pendentes:
             update.message.reply_text("⏳ *Nenhum comprovante pendente aguardando aprovação.*", parse_mode=ParseMode.MARKDOWN)
         else:
-            for idx, c in enumerate(comprovantes_pendentes, start=1):
+            for c in comprovantes_pendentes:
                 txt = (
-                    f"{idx}️⃣ [Pendente]\n"
+                    f"🆔 ID: `{c['id']}`\n"
                     f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
                     f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
                     f"💳 Tipo: {c['tipo']}\n"
@@ -91,8 +90,8 @@ def responder(update, context):
                 )
                 keyboard = [
                     [
-                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx}"),
-                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{idx}")
+                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{c['id']}"),
+                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{c['id']}")
                     ]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
@@ -108,7 +107,7 @@ def responder(update, context):
         update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
     else:
         if update.message.chat.type == "private":
-            update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
+            update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda'.")
 
 def button_handler(update, context):
     query = update.callback_query
@@ -129,9 +128,9 @@ def button_handler(update, context):
                 parse_mode=ParseMode.MARKDOWN
             )
         else:
-            for idx, c in enumerate(comprovantes_pendentes, start=1):
+            for c in comprovantes_pendentes:
                 txt = (
-                    f"{idx}️⃣ [Pendente]\n"
+                    f"🆔 ID: `{c['id']}`\n"
                     f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
                     f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
                     f"💳 Tipo: {c['tipo']}\n"
@@ -139,8 +138,8 @@ def button_handler(update, context):
                 )
                 keyboard = [
                     [
-                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{idx}"),
-                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{idx}")
+                        InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{c['id']}"),
+                        InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{c['id']}")
                     ]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
@@ -151,28 +150,28 @@ def button_handler(update, context):
                     reply_markup=markup
                 )
     elif data.startswith("aprovar_"):
-        idx = data.split("_", 1)[1]
+        comp_id = data.split("_", 1)[1]
         if query.from_user.id != admin_id:
             query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
             return
-        texto = aprova_callback(idx, query.from_user)
+        texto = aprova_callback(comp_id, query.from_user)
         try:
             query.edit_message_text(text=texto, parse_mode=ParseMode.MARKDOWN)
         except Exception:
             query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
         query.answer("Comprovante aprovado e saldo liberado!")
     elif data.startswith("rejeitar_"):
-        idx = data.split("_", 1)[1]
+        comp_id = data.split("_", 1)[1]
         if query.from_user.id != admin_id:
             query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
             return
         query.answer()
         chat_id = query.message.chat_id
         msg_id = query.message.message_id
-        _motivos_rejeicao[admin_id] = (chat_id, msg_id, idx)
+        _motivos_rejeicao[admin_id] = (chat_id, msg_id, comp_id)
         context.bot.send_message(
             chat_id=query.from_user.id,
-            text=f"Digite o motivo da rejeição do comprovante #{idx}: (exemplo: Divergência de valor)"
+            text=f"Digite o motivo da rejeição do comprovante {comp_id}: (exemplo: Divergência de valor)"
         )
     elif data == "menu_saldo":
         resposta = processar_mensagem("total liquido", query.from_user.id, get_username(query.from_user))
@@ -203,8 +202,8 @@ def motivo_rejeicao_handler(update, context):
     username = get_username(update.message.from_user)
     motivo = update.message.text
     if user_id in _motivos_rejeicao:
-        chat_id, msg_id, idx = _motivos_rejeicao.pop(user_id)
-        resposta = rejeita_callback(idx, update.message.from_user, motivo)
+        chat_id, msg_id, comp_id = _motivos_rejeicao.pop(user_id)
+        resposta = rejeita_callback(comp_id, update.message.from_user, motivo)
         if resposta and resposta.strip():
             try:
                 context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
