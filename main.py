@@ -12,11 +12,11 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID", "0"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-PORT = int(os.environ.get('PORT', 8443'))
+PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
 
-# Simulação de "banco de dados" dos comprovantes pendentes
+# "Banco" simples de comprovantes pendentes
 comprovantes_pendentes = []
 
 def formatar_valor(v):
@@ -31,7 +31,6 @@ def is_admin(user_id):
     return int(user_id) == int(ADMIN_ID)
 
 def parse_valor_pix(mensagem):
-    # Aceita "2.000,00" ou "2000,00" ou "2,00"
     m = re.search(r"([\d\.]+,\d{2})\s*pix", mensagem.lower())
     if not m:
         m = re.search(r"(\d+,\d{2})\s*pix", mensagem.lower())
@@ -42,11 +41,11 @@ def parse_valor_pix(mensagem):
     return None
 
 def processar_mensagem(texto, user_id, username):
-    # Detecta comprovante PIX no padrão variado, retorna resposta detalhada
     valor_pix = parse_valor_pix(texto)
     if valor_pix:
-        taxa = 0.002  # 0.20%
-        liquido = valor_pix * (1 - taxa)
+        taxa_perc = 0.2   # 0.20%
+        taxa = valor_pix * taxa_perc / 100
+        liquido = valor_pix - taxa
         now = datetime.now()
         horario = now.strftime("%H:%M/%Y-%m-%d")
         comp_id = str(uuid.uuid4())[:8]
@@ -56,7 +55,7 @@ def processar_mensagem(texto, user_id, username):
             "valor_liquido": liquido,
             "tipo": "PIX",
             "hora": horario,
-            "taxa": "0.20%",
+            "taxa": f"{taxa_perc:.2f}%",
             "user": username
         }
         comprovantes_pendentes.append(comp)
