@@ -125,7 +125,13 @@ def button_handler(update: Update, context):
                     ]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
-                query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+                # ENVIA CADA PENDENTE EM UMA MENSAGEM SEPARADA!!
+                context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=texto,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=markup
+                )
     elif data == "menu_lucro":
         if is_admin(query.from_user.id):
             texto = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
