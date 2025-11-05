@@ -3,6 +3,7 @@ import re
 import uuid
 from datetime import datetime, timedelta
 import pytz
+import shlex
 
 log_operacoes = []
 
@@ -134,67 +135,184 @@ def aprova_callback(comp_id, admin_user):
 def rejeita_callback(comp_id, admin_user, motivo):
     return rejeitar_pendente(comp_id, get_username(admin_user), motivo)
 
+# ========== RELATÓRIOS E EXTRATOS ==========
+
+def extrato_visual(periodo="hoje"):
+    fuso = pytz.timezone('America/Sao_Paulo')
+    hoje = datetime.now(fuso).strftime('%Y-%m-%d')
+    if periodo == "hoje":
+        data_inicial = data_final = hoje
+        titulo_periodo = hoje
+    elif "7" in periodo:
+        dt = datetime.now(fuso)
+        data_final = dt.strftime('%Y-%m-%d')
+        data_inicial = (dt - timedelta(days=6)).strftime('%Y-%m-%d')
+        titulo_periodo = f"{data_inicial} a {data_final}"
+    else:
+        data_inicial = data_final = hoje
+        titulo_periodo = hoje
+
+    def dentro(dt):
+        return data_inicial <= dt <= data_final
+
+    linhas = [f"📄 *Extrato Detalhado — {titulo_periodo}*"]
+    for idx, c in enumerate([x for x in comprovantes if dentro(x["data"])], start=1):
+        linhas.append(
+            f"{idx}️⃣ [Aprovado]\n"
+            f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+            f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+            f"💳 Tipo: {c['tipo']}\n"
+            f"⏰ Hora: {c['hora']}"
+        )
+    for c in [x for x in comprovantes_pendentes if dentro(x["data"])]:
+        linhas.append(
+            f"⏳ [Pendente]\n"
+            f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
+            f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
+            f"💳 Tipo: {c['tipo']}\n"
+            f"⏰ Hora: {c['hora']}"
+        )
+    for p in [x for x in pagamentos if dentro(x["data"])]:
+        linhas.append(
+            f"💵 [Pagamento feito]\n"
+            f"🏷 Valor: {formatar_valor(p['valor'])}\n"
+            f"⏰ Hora: {p['hora']}"
+        )
+    if len(linhas) == 1:
+        linhas.append("_Nenhum lançamento no período._")
+    return "\n\n".join(linhas)
+
+def relatorio_lucro(periodo="dia"):
+    fuso = pytz.timezone('America/Sao_Paulo')
+    dt_now = datetime.now(fuso)
+    if periodo == "dia":
+        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do dia {data_ini}"
+    elif periodo == "semana":
+        data_fim = dt_now.strftime('%Y-%m-%d')
+        data_ini = (dt_now - timedelta(days=6)).strftime('%Y-%m-%d')
+        titulo = f"Lucro da semana ({data_ini} a {data_fim})"
+    elif periodo == "mes":
+        data_ini = dt_now.replace(day=1).strftime('%Y-%m-%d')
+        data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do mês ({data_ini} a {data_fim})"
+    else:
+        data_ini = data_fim = dt_now.strftime('%Y-%m-%d')
+        titulo = f"Lucro do dia {data_ini}"
+
+    def dentro(data):
+        return data_ini <= data <= data_fim
+
+    total_bruto_pix = total_bruto_cartao = 0.0
+    total_liquido_pix = total_liquido_cartao = 0.0
+    total_lucro_pix = total_lucro_cartao = 0.0
+
+    for c in (x for x in comprovantes if dentro(x["data"])):
+        valor = c["valor_bruto"]
+        tipo = c["tipo"]
+        liquido_loja = c["valor_liquido"]
+
+        if tipo == "PIX":
+            taxa_loja = taxa_pix
+            taxa_maquina = 0.0
+            lucro_pix = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_pix += valor
+            total_liquido_pix += liquido_loja
+            total_lucro_pix += lucro_pix
+        elif "ELO" in tipo:
+            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+            taxa_loja = taxas_elo.get(parcelas, 0)
+            taxa_maquina = taxas_reais_elo.get(parcelas, 0)
+            lucro_elo = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_cartao += valor
+            total_liquido_cartao += liquido_loja
+            total_lucro_cartao += lucro_elo
+        elif "AMEX" in tipo:
+            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+            taxa_loja = taxas_amex.get(parcelas, 0)
+            taxa_maquina = taxas_reais_amex.get(parcelas, 0)
+            lucro_amex = valor * (taxa_loja - taxa_maquina) / 100
+            total_bruto_cartao += valor
+            total_liquido_cartao += liquido_loja
+            total_lucro_cartao += lucro_amex
+        elif "X" in tipo:
+            try:
+                parcelas = int(re.sub(r'\D', '', tipo))
+                taxa_loja = taxas_cartao.get(parcelas, 0)
+                taxa_maquina = taxas_reais_cartao.get(parcelas, 0)
+                lucro_cartao = valor * (taxa_loja - taxa_maquina) / 100
+                total_bruto_cartao += valor
+                total_liquido_cartao += liquido_loja
+                total_lucro_cartao += lucro_cartao
+            except Exception:
+                pass
+
+    total_bruto = total_bruto_pix + total_bruto_cartao
+    total_liquido = total_liquido_pix + total_liquido_cartao
+    total_lucro = total_lucro_pix + total_lucro_cartao
+
+    return f"""📈 *{titulo}*
+
+*PIX:*
+ • Bruto: `{formatar_valor(total_bruto_pix)}`
+ • Líquido (loja): `{formatar_valor(total_liquido_pix)}`
+ • Seu lucro: `{formatar_valor(total_lucro_pix)}`
+
+*Cartão:*
+ • Bruto: `{formatar_valor(total_bruto_cartao)}`
+ • Líquido (loja): `{formatar_valor(total_liquido_cartao)}`
+ • Seu lucro: `{formatar_valor(total_lucro_cartao)}`
+
+*TOTAL:*
+ • Bruto: `{formatar_valor(total_bruto)}`
+ • Líquido (loja): `{formatar_valor(total_liquido)}`
+ • Seu lucro: `{formatar_valor(total_lucro)}`
+"""
+
+def listar_comprovantes(dia=None):
+    comps = comprovantes if not dia else [c for c in comprovantes if c["data"] == dia]
+    if not comps:
+        return "📋 *Nenhum comprovante aprovado.*"
+    linhas = [f"📋 *Comprovantes aprovados{' do dia' if dia else ''}:*"]
+    for idx, c in enumerate(comps, start=1):
+        linhas.append(
+            f"`[{idx}]` {formatar_valor(c['valor_bruto'])} → Líq: {formatar_valor(c['valor_liquido'])} - {c['tipo']} - {c['hora']}/{c['data']}"
+        )
+    return "\n".join(linhas)
+
+def listar_pagamentos(dia=None):
+    pays = pagamentos if not dia else [p for p in pagamentos if p["data"] == dia]
+    if not pays:
+        return "💸 *Nenhum pagamento realizado.*"
+    linhas = [f"💸 *Pagamentos realizados{' do dia' if dia else ''}:*"]
+    for idx, p in enumerate(pays, start=1):
+        linhas.append(
+            f"`[{idx}]` {formatar_valor(p['valor'])} {p['hora']}/{p['data']}"
+        )
+    return "\n".join(linhas)
+
+# ========== COMANDO PRINCIPAL ==========
+
 def processar_mensagem(texto, user_id, username="ADMIN"):
     texto = texto.strip().lower()
     admin = is_admin(user_id)
     hora, data = get_data_hora_brasilia()
 
+    # ========== LIMPEZA ==========
     if texto == "limpar pendentes" and admin:
         return limpar_pendentes()
+    if texto == "limpar tudo" and admin:
+        comprovantes.clear()
+        pagamentos.clear()
+        solicitacoes.clear()
+        comprovantes_pendentes.clear()
+        log_operacoes.clear()
+        return "🧹 Todos os dados foram zerados com sucesso."
 
+    # ========== MENU / AJUDA ==========
     if texto in ["/menu", "menu"]:
         return "MENU_BOTAO"
-
-    if texto in ["listar pendentes", "pendentes"]:
-        return listar_pendentes()
-
-    # ENTRADA DE NOVO COMPROVANTE (com id único)
-    valor, tipo, bandeira = extrair_valor_tipo_bandeira(texto)
-    if valor and tipo:
-        liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
-        if liquido is None:
-            return "❌ Tipo de pagamento inválido. Exemplo: 1000,00 pix ou 2000,00 10x"
-        uuid_id = str(uuid.uuid4())
-        comprovantes_pendentes.append({
-            "id": uuid_id,
-            "valor_bruto": valor,
-            "valor_liquido": liquido,
-            "tipo": (f"{bandeira.upper()} {tipo.upper()}" if bandeira else tipo.upper()),
-            "hora": hora,
-            "data": data
-        })
-        return (
-            f"⏳ Comprovante aguardando confirmação\n"
-            f"ID#{uuid_id}\n"
-            f"💰 Valor bruto: {formatar_valor(valor)}\n"
-            f"💳 Tipo: {(f'{bandeira.upper()} {tipo.upper()}' if bandeira else tipo.upper())}\n"
-            f"🕰️ Horário: {hora} {data}\n"
-            f"🧾 Taxa aplicada: {taxa:.2f}%\n"
-            f"✅ Valor líquido a liberar: {formatar_valor(liquido)}\n"
-            f"\nAguarde conferência."
-        )
-
-    # Aprovar e rejeitar usando id
-    if texto.startswith("aprovar") and admin:
-        partes = texto.split()
-        if len(partes) < 2:
-            return "❌ Use: aprovar <ID do pendente>."
-        comp_id = partes[1]
-        return aprovar_pendente(comp_id, username)
-
-    if texto.startswith("rejeitar") and admin:
-        partes = texto.split()
-        if len(partes) < 3:
-            return "❌ Use: rejeitar <ID> <motivo>."
-        comp_id, motivo = partes[1], " ".join(partes[2:])
-        return rejeitar_pendente(comp_id, username, motivo)
-
-    # saldo total liquido
-    if texto == "total liquido":
-        total_liquido = credito_disponivel()
-        return f"💰 *Valor líquido disponível (apenas aprovados, já descontados pagamentos):* `{formatar_valor(total_liquido)}`"
-
-    if texto == "ajuda":
+    if texto in ["/ajuda", "ajuda"]:
         return """🤖 *Comandos disponíveis*:
 
 📋 Use /menu ou envie "menu" para acessar os botões de atalho!
@@ -230,5 +348,114 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
 • `relatorio lucro mes`
 • `meu id`
 """
+
+    # ========== LISTAGEM ==========
+    if texto in ["listar pendentes", "pendentes"]:
+        return listar_pendentes()
+    if texto == "listar pagamentos" and admin:
+        return listar_pagamentos()
+    if texto == "listar comprovantes" and admin:
+        return listar_comprovantes()
+
+    # ========== EXTRATOS / RELATÓRIO ==========
+    if texto in ["extrato", "extrato de hoje", "extrato do dia", "/extrato"]:
+        return extrato_visual("hoje")
+    if "7" in texto and "extrato" in texto:
+        return extrato_visual("7dias")
+    if texto == "fechamento do dia" or texto == "fechamento diário":
+        return extrato_visual("hoje")
+    if texto.startswith("relatorio lucro"):
+        if "semana" in texto:
+            return relatorio_lucro("semana")
+        elif "mes" in texto:
+            return relatorio_lucro("mes")
+        else:
+            return relatorio_lucro("dia")
+
+    # ========== APROVAÇÃO / REJEIÇÃO ==========
+    if texto.startswith("aprovar") and admin:
+        partes = texto.split()
+        if len(partes) < 2:
+            return "❌ Use: aprovar <ID do pendente>."
+        comp_id = partes[1]
+        return aprovar_pendente(comp_id, username)
+
+    if texto.startswith("rejeitar") and admin:
+        partes = texto.split()
+        if len(partes) < 3:
+            return "❌ Use: rejeitar <ID> <motivo>."
+        comp_id, motivo = partes[1], " ".join(partes[2:])
+        return rejeitar_pendente(comp_id, username, motivo)
+
+    # ========== SALDO, PAGAMENTOS, SOLICITAÇÕES ==========
+    if texto == "total liquido":
+        total_liquido = credito_disponivel()
+        return f"💰 *Valor líquido disponível (apenas aprovados, já descontados pagamentos):* `{formatar_valor(total_liquido)}`"
+    if texto == "pagamentos realizados":
+        total = sum(p["valor"] for p in pagamentos)
+        return f"✅ *Total pago até agora:* `{formatar_valor(total)}`"
+
+    if texto.startswith("solicito"):
+        valor = normalizar_valor(texto)
+        credito = credito_disponivel()
+        if not valor:
+            return "❌ Valor inválido para solicitação."
+        if valor > credito:
+            return f"❌ Solicitação maior que o crédito disponível: `{formatar_valor(credito)}`"
+        solicitacoes.append({"valor": valor})
+        registrar_acao("SOLICITAÇÃO", username, f"Solicitação de pagamento de {formatar_valor(valor)}")
+        return f"📝 *Solicitação de pagamento registrada:* `{formatar_valor(valor)}`. Aguarde confirmação do admin com 'pagamento feito'."
+
+    if texto.startswith("pagamento feito"):
+        valor = normalizar_valor(texto)
+        credito = credito_disponivel()
+        if valor is None:
+            if not solicitacoes:
+                return "❌ Nenhuma solicitação de pagamento encontrada."
+            valor = solicitacoes.pop(0)["valor"]
+        else:
+            for s in solicitacoes:
+                if abs(s["valor"] - valor) < 0.01:
+                    solicitacoes.remove(s)
+                    break
+        if valor > credito:
+            return f"❌ O pagamento de `{formatar_valor(valor)}` excede o crédito disponível: `{formatar_valor(credito)}`"
+        saldo_anterior = credito
+        novo_saldo = round(credito - valor, 2)
+        pagamentos.append({"valor": valor, "hora": hora, "data": data})
+        registrar_acao("PAGAMENTO", username, f"Pagou {formatar_valor(valor)} (Saldo antes: {formatar_valor(saldo_anterior)})")
+        return f"""✅ *Pagamento registrado com sucesso!*
+💵 Valor: `{formatar_valor(valor)}`
+📉 Saldo anterior: `{formatar_valor(saldo_anterior)}`
+💰 Novo saldo disponível: `{formatar_valor(novo_saldo)}`"""
+
+    if texto == "meu id":
+        return f"Seu user_id: {user_id}\nEste chat_id: {username}"
+
+    # ========== ENTRADA DE COMPROVANTE ==========
+    valor, tipo, bandeira = extrair_valor_tipo_bandeira(texto)
+    if valor and tipo:
+        liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
+        if liquido is None:
+            return "❌ Tipo de pagamento inválido. Exemplo: 1000,00 pix ou 2000,00 10x"
+        uuid_id = str(uuid.uuid4())
+        comprovantes_pendentes.append({
+            "id": uuid_id,
+            "valor_bruto": valor,
+            "valor_liquido": liquido,
+            "tipo": (f"{bandeira.upper()} {tipo.upper()}" if bandeira else tipo.upper()),
+            "hora": hora,
+            "data": data
+        })
+        return (
+            f"⏳ Comprovante aguardando confirmação\n"
+            f"ID#{uuid_id}\n"
+            f"💰 Valor bruto: {formatar_valor(valor)}\n"
+            f"💳 Tipo: {(f'{bandeira.upper()} {tipo.upper()}' if bandeira else tipo.upper())}\n"
+            f"🕰️ Horário: {hora} {data}\n"
+            f"🧾 Taxa aplicada: {taxa:.2f}%\n"
+            f"✅ Valor líquido a liberar: {formatar_valor(liquido)}\n"
+            f"\nAguarde conferência."
+        )
 
     return None
