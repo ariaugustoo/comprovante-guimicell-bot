@@ -156,9 +156,11 @@ def button_handler(update, context):
             return
         texto = aprova_callback(comp_id, query.from_user)
         try:
-            query.edit_message_text(text=texto, parse_mode=ParseMode.MARKDOWN)
+            if texto:
+                query.edit_message_text(text=texto, parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+            if texto:
+                query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
         query.answer("Comprovante aprovado e saldo liberado!")
     elif data.startswith("rejeitar_"):
         comp_id = data.split("_", 1)[1]
@@ -176,26 +178,31 @@ def button_handler(update, context):
     elif data == "menu_saldo":
         resposta = processar_mensagem("total liquido", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_extrato":
         resposta = processar_mensagem("extrato", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_extrato_7":
         resposta = processar_mensagem("extrato 7dias", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_fechamento":
         resposta = processar_mensagem("fechamento do dia", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_solicitar_pag":
         query.answer()
         query.message.reply_text("📝 Para solicitar pagamento, envie:\n`solicito 300,00`", parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_ajuda":
         resposta = processar_mensagem("ajuda", query.from_user.id, get_username(query.from_user))
         query.answer()
-        query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def motivo_rejeicao_handler(update, context):
     user_id = update.message.from_user.id
