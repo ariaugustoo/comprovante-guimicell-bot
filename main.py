@@ -14,8 +14,8 @@ PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
 
-# ========== ESTRUTURAS AJUSTADAS PARA USAR ID EXCLUSIVO ==========
-# Simulação de "banco de dados" dos comprovantes (você pode adaptar para persistência real)
+# ==================
+# Utilitários e fake BD
 comprovantes_pendentes = []
 def formatar_valor(v):
     return f'R$ {float(v):,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")
@@ -29,12 +29,10 @@ def is_admin(user_id):
     return int(user_id) == int(ADMIN_ID)
 
 def processar_mensagem(texto, user_id, username):
-    # Simulação de processamento - detecta comprovante tipo "1000,00 pix"
     texto = texto.lower().replace(" ", "")
     if "pix" in texto and "," in texto:
-        # É um comprovante novo!
         valor_bruto = texto.split(",")[0]
-        valor_liquido = float(valor_bruto.replace(".", "").replace("r$", "")) - 2  # exemplo taxa
+        valor_liquido = float(valor_bruto.replace(".", "").replace("r$", "")) - 2  # taxa só exemplo
         comp_id = str(uuid.uuid4())[:8]
         comp = {
             "id": comp_id,
@@ -46,7 +44,7 @@ def processar_mensagem(texto, user_id, username):
         }
         comprovantes_pendentes.append(comp)
         return f"Comprovante aguardando confirmação [ID#{comp_id}]\n💸 Bruto: {formatar_valor(valor_bruto)}\n✅ Líquido: {formatar_valor(valor_liquido)}\n💳 Tipo: PIX\n👤 Usuário: {username}\n\nAguarde aprovação do admin!"
-    if texto == "listar pendentes":
+    if texto == "listarpendentes":
         if not comprovantes_pendentes:
             return "⏳ *Nenhum comprovante pendente aguardando aprovação.*"
         pendentes = ""
@@ -59,7 +57,6 @@ def processar_mensagem(texto, user_id, username):
                 f"⏰ Hora: {c['hora']}\n\n"
             )
         return "⏳ *Pendentes aguardando conferência:*\n\n" + pendentes
-    # outros comandos/fluxos aqui...
     return None
 
 def aprova_callback(comp_id, user):
@@ -80,7 +77,6 @@ def rejeita_callback(comp_id, user, motivo):
     else:
         return "❌ Índice de pendente inválido (ID não encontrado)."
 
-# ========== ENVIO DE COMPROVANTE COM ID ÚNICO NOS BOTÕES ==========
 def send_pending_comprovante(update, context, resposta, comp_id):
     print("DEBUG CHAT_ID:", update.effective_chat.id, "(type:", type(update.effective_chat.id), ") / GROUP_ID do .env:", os.getenv("GROUP_ID"), "(type:", type(os.getenv("GROUP_ID")), ")")
     keyboard = [
@@ -126,15 +122,14 @@ def responder(update, context):
     username = get_username(update.message.from_user)
     resposta = processar_mensagem(texto, user_id, username)
 
-    # Checa se é mensagem de comprovante aguardando aprovação
     m = re.search(r"\[ID#([a-f0-9]+)\]", resposta or "")
     if m:
         comp_id = m.group(1)
         send_pending_comprovante(update, context, resposta, comp_id)
         return
 
-    # Listar pendentes comando digitado: cada pendente em mensagem separada com botões
-    if texto.lower().strip() == "listar pendentes":
+    # Listar pendentes comando digitado: cada pendente em mensagem separada
+    if texto.lower().replace(" ", "") == "listarpendentes":
         if not comprovantes_pendentes:
             update.message.reply_text("⏳ *Nenhum comprovante pendente aguardando aprovação.*", parse_mode=ParseMode.MARKDOWN)
         else:
@@ -272,17 +267,20 @@ def motivo_rejeicao_handler(update, context):
     if user_id in _motivos_rejeicao:
         chat_id, msg_id, comp_id = _motivos_rejeicao.pop(user_id)
         resposta = rejeita_callback(comp_id, update.message.from_user, motivo)
-        try:
-            context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
-        except Exception:
-            context.bot.send_message(chat_id=chat_id, text=resposta)
-        update.message.reply_text("Rejeição registrada!")
+        if resposta and resposta.strip():
+            try:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
+            except Exception:
+                context.bot.send_message(chat_id=chat_id, text=resposta)
+            update.message.reply_text("Rejeição registrada!")
     else:
         resposta = processar_mensagem(motivo, user_id, username)
-        try:
-            update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            update.message.reply_text(resposta)
+        # SÓ ENVIA SE NÃO FOR VAZIO!
+        if resposta and resposta.strip():
+            try:
+                update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                update.message.reply_text(resposta)
 
 def start(update, context):
     msg = (
@@ -299,7 +297,8 @@ def ajuda(update, context):
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
     resposta = processar_mensagem("ajuda", user_id, username)
-    update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+    if resposta and resposta.strip():
+        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
 
 def main():
     print("==== Bot foi iniciado e está rodando ====")
