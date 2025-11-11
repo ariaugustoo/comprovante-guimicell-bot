@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+import math
 from datetime import datetime, timedelta
 import pytz
 
@@ -26,14 +27,16 @@ taxas_reais_cartao = {1: 3.28, 2: 3.96, 3: 4.68, 4: 5.40, 5: 6.12, 6: 6.84, 7: 7
 taxa_pix = 0.20
 
 def formatar_valor(valor):
-    try: valor = float(valor)
-    except Exception: valor = 0.0
+    try:
+        valor = float(valor)
+    except Exception:
+        valor = 0.0
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def get_data_hora_brasilia():
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
-    # Hora HH:MM, Data DD/MM/YYYY (formato exibido e salvo)
+    # Hora HH:MM, Data DD/MM/YYYY
     return agora.strftime('%H:%M'), agora.strftime('%d/%m/%Y')
 
 VALOR_BRL_REGEX = r"(\d{1,3}(?:\.\d{3})*,\d{2})"
@@ -49,40 +52,51 @@ def normalizar_valor(texto):
         texto = texto.replace(".", "").replace(",", ".")
     else:
         texto = texto.replace(",", "")
-    try: return float(texto)
-    except Exception: return None
+    try:
+        return float(texto)
+    except Exception:
+        return None
 
 def extrair_valor_tipo_bandeira(texto):
     """
     Retorna (valor_float, tipo, bandeira)
     tipo: 'pix' ou '10x' (string)
     bandeira: 'elo'|'amex'|None
+    Aceita formatos simples: '1000', '1000 pix', '1000 10x', 'elo 12x 1200' etc.
     """
     texto = texto.lower().strip()
-    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(elo|amex)?\s*(pix|\d{1,2}x)$", texto)
+    # padrão: valor [bandeira]? [tipo]
+    # tenta casos comuns
+    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d{2})?)\s*(elo|amex)?\s*(pix|\d{1,2}x)?$", texto)
     if match:
         valor, bandeira, tipo = match.groups()
+        tipo = tipo or "pix"
         bandeira = bandeira if bandeira in ("elo", "amex") else None
         return normalizar_valor(valor), tipo, bandeira
-    match = re.match(r"^(elo|amex)?\s*(pix|\d{1,2}x)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
+    # padrão: [bandeira]? [tipo] valor
+    match = re.match(r"^(elo|amex)?\s*(pix|\d{1,2}x)?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d{2})?)$", texto)
     if match:
         bandeira, tipo, valor = match.groups()
+        tipo = tipo or "pix"
         bandeira = bandeira if bandeira in ("elo", "amex") else None
         return normalizar_valor(valor), tipo, bandeira
-    # se vier só valor, aceita (tratado pelo chamador)
-    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
+    # se vier só valor (ex: "1000" ou "1000,00" ou "1000.00")
+    match = re.match(r"^(\d+(?:[.,]\d{2})?)$", texto)
     if match:
         return normalizar_valor(match.group(1)), "pix", None
     return None, None, None
 
 def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
-    tipo = tipo.lower()
+    tipo = (tipo or "pix").lower()
     if tipo == "pix":
         taxa = taxa_pix
         liquido = valor * (1 - taxa / 100)
         return round(liquido, 2), taxa
     elif "x" in tipo:
-        parcelas = int(re.sub(r'\D', '', tipo))
+        try:
+            parcelas = int(re.sub(r'\D', '', tipo))
+        except Exception:
+            parcelas = 1
         if bandeira == "elo":
             taxa = taxas_elo.get(parcelas, 0)
         elif bandeira == "amex":
@@ -96,7 +110,35 @@ def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
     else:
         return None, None
 
-# pequena função utilitária para a calculadora (retorna string)
+def calcular_bruto_para_liquido(liquido_desejado, tipo, bandeira):
+    """
+    Inverte a taxa: dado o líquido desejado, retorna o bruto que precisa ser cobrado.
+    Arredonda o bruto PARA CIMA (sempre) em centavos para evitar valores abaixo do desejado.
+    """
+    tipo = (tipo or "pix").lower()
+    if tipo == "pix":
+        taxa = taxa_pix
+    elif "x" in tipo:
+        try:
+            parcelas = int(re.sub(r'\D', '', tipo))
+        except Exception:
+            parcelas = 1
+        if bandeira == "elo":
+            taxa = taxas_elo.get(parcelas, 0)
+        elif bandeira == "amex":
+            taxa = taxas_amex.get(parcelas, 0)
+        else:
+            taxa = taxas_cartao.get(parcelas, 0)
+    else:
+        return None, None
+    if taxa == 0:
+        return None, None
+    bruto = liquido_desejado / (1 - taxa / 100)
+    # arredonda para cima em centavos
+    bruto_arred = math.ceil(bruto * 100) / 100.0
+    return round(bruto_arred, 2), taxa
+
+# utilitário: calculadora direta (bruto -> líquido)
 def calculadora_simples_input(valor, tipo="pix", bandeira=None):
     liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
     if liquido is None:
@@ -108,6 +150,23 @@ def calculadora_simples_input(valor, tipo="pix", bandeira=None):
         f"💳 Tipo: `{tipo_display}`\n"
         f"🧾 Taxa aplicada: `{taxa:.2f}%`\n"
         f"✅ Valor líquido que você receberá: `{formatar_valor(liquido)}`"
+    )
+
+# utilitário: calculadora reversa (líquido desejado -> bruto arredondado para cima)
+def calculadora_reversa_input(liquido_desejado, tipo="pix", bandeira=None):
+    bruto, taxa = calcular_bruto_para_liquido(liquido_desejado, tipo, bandeira)
+    if bruto is None:
+        return "❌ Não foi possível calcular o bruto para esse tipo/bandeira. Verifique entrada (ex: `500,00 pix` ou `500,00 10x` ou `500,00 elo 10x`)."
+    tipo_display = (f"{bandeira.upper()} {tipo.upper()}" if bandeira else tipo.upper())
+    # mostrar o líquido real após arredondar o bruto (após taxa) para confirmar que não ficou abaixo do desejado
+    liquido_aproximado, _ = calcular_valor_liquido_bandeira(bruto, tipo, bandeira)
+    return (
+        f"🧮 *Calculadora reversa*\n\n"
+        f"✅ Você quer receber líquido: `{formatar_valor(liquido_desejado)}`\n"
+        f"💳 Tipo considerado: `{tipo_display}`\n"
+        f"🧾 Taxa aplicada: `{taxa:.2f}%`\n"
+        f"💰 Você precisa cobrar (bruto, arredondado para cima): `{formatar_valor(bruto)}`\n"
+        f"🔎 Após a taxa, você receberá aproximadamente: `{formatar_valor(liquido_aproximado)}`"
     )
 
 def credito_disponivel():
@@ -159,12 +218,7 @@ def rejeita_callback(comp_id, admin_user, motivo):
     return rejeitar_pendente(comp_id, get_username(admin_user), motivo)
 
 # ========== RELATÓRIOS E EXTRATOS ==========
-
 def extrato_visual(periodo="hoje"):
-    """
-    Extrato com datas no formato DD/MM/YYYY. Antes de comparar converte para datetime.
-    Ao final mostra totais brutos: PIX, CARTÃO e total de pagamentos.
-    """
     fuso = pytz.timezone('America/Sao_Paulo')
     hoje_dt = datetime.now(fuso)
     data_format = "%d/%m/%Y"
@@ -182,7 +236,6 @@ def extrato_visual(periodo="hoje"):
     def dentro(dt_str):
         try:
             dt_obj = datetime.strptime(dt_str, data_format)
-            # compare dates only
             return data_ini_dt.date() <= dt_obj.date() <= data_fim_dt.date()
         except Exception:
             return False
@@ -193,7 +246,6 @@ def extrato_visual(periodo="hoje"):
     total_bruto_cartao = 0.0
     total_pagamentos = 0.0
 
-    # comprovantes aprovados
     aprovados = [x for x in comprovantes if dentro(x.get("data", ""))]
     for idx, c in enumerate(aprovados, start=1):
         tipo = c.get("tipo", "")
@@ -209,7 +261,6 @@ def extrato_visual(periodo="hoje"):
         else:
             total_bruto_cartao += c["valor_bruto"]
 
-    # pendentes
     pend = [x for x in comprovantes_pendentes if dentro(x.get("data", ""))]
     for c in pend:
         linhas.append(
@@ -220,7 +271,6 @@ def extrato_visual(periodo="hoje"):
             f"⏰ Hora: {c.get('hora','')} {c.get('data','')}"
         )
 
-    # pagamentos
     pays = [x for x in pagamentos if dentro(x.get("data", ""))]
     for p in pays:
         linhas.append(
@@ -230,7 +280,6 @@ def extrato_visual(periodo="hoje"):
         )
         total_pagamentos += p["valor"]
 
-    # totais finais
     linhas.append("\n*Totais finais (bruto):*")
     linhas.append(f" • PIX: `{formatar_valor(total_bruto_pix)}`")
     linhas.append(f" • Cartões: `{formatar_valor(total_bruto_cartao)}`")
@@ -241,9 +290,6 @@ def extrato_visual(periodo="hoje"):
     return "\n\n".join(linhas)
 
 def relatorio_lucro(periodo="dia"):
-    """
-    Relatório de lucro por período (data em DD/MM/YYYY; converte para datetime para filtrar).
-    """
     fuso = pytz.timezone('America/Sao_Paulo')
     dt_now = datetime.now(fuso)
     data_format = "%d/%m/%Y"
@@ -366,20 +412,29 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     admin = is_admin(user_id)
     hora, data = get_data_hora_brasilia()
 
-    # ========== CALCULADORA ==========
-    # Suporta: /calc 1000,00 pix | calc 1000,00 10x | calcular 1000,00 elo 12x
-    if texto.startswith("/calc") or texto.startswith("calc") or texto.startswith("calcular"):
+    # ========== CALCULADORA DIRETA / REVERSA ==========
+    if texto.startswith("/calc") or texto.startswith("calc") or texto.startswith("calcular") or texto.startswith("/c") or texto.startswith("c "):
         partes = texto.split(maxsplit=1)
         if len(partes) < 2 or not partes[1].strip():
             return ("🧮 *Calculadora*\n"
-                    "Use: `/calc 1000,00 pix` ou `/calc 1000,00 10x` ou `/calc 1200,00 elo 12x`\n"
-                    "Se você passar só o valor, assumimos PIX: `/calc 1000,00`")
+                    "Use (exemplos simples): `/calc 1000 pix` ou `/c 1000` ou `/calc 1000 10x`.\n"
+                    "Se passar só o valor, assumimos PIX: `/calc 1000`")
         payload = partes[1].strip()
         valor, tipo, bandeira = extrair_valor_tipo_bandeira(payload)
         if valor is None:
-            return "❌ Valor inválido. Use o formato: `1000,00 pix` ou `1000,00 10x`"
-        # se extrair_valor_tipo_bandeira retornar tipo None (só valor), default PIX já tratado lá
+            return "❌ Valor inválido. Use o formato: `1000 pix` ou `1000 10x`"
         return calculadora_simples_input(valor, tipo or "pix", bandeira)
+
+    if texto.startswith("/calc_bruto") or texto.startswith("calc_bruto") or texto.startswith("/cb") or texto.startswith("cb ") or texto.startswith("quanto cobrar"):
+        partes = texto.split(maxsplit=1)
+        if len(partes) < 2 or not partes[1].strip():
+            return ("🧮 *Calculadora Reversa*\n"
+                    "Use: `/calc_bruto 500 pix` ou `/cb 500` (assume PIX) ou `/calc_bruto 500 10x`")
+        payload = partes[1].strip()
+        valor_liq, tipo, bandeira = extrair_valor_tipo_bandeira(payload)
+        if valor_liq is None:
+            return "❌ Valor inválido. Use: `500 pix` ou `500 10x`"
+        return calculadora_reversa_input(valor_liq, tipo or "pix", bandeira)
 
     # ========== LIMPEZA ==========
     if texto == "limpar pendentes" and admin:
@@ -403,6 +458,12 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
 📥 *Enviar comprovante para conferência (aprovado pelo admin):*
 • `1000,00 pix`
 • `1000,00 10x` ou `1000,00 elo 10x` ou `1000,00 amex 10x`
+
+🧮 *Calculadora simples (bruto → líquido):*
+• `/calc 1000 pix` ou `/c 1000` (se só passar valor assume PIX)
+
+🧮 *Calculadora reversa (quanto cobrar para obter X líquido):*
+• `/calc_bruto 500 pix` ou `/cb 500` (se só passar valor assume PIX)
 
 ⏸️ *Consultar pendentes de conferência:*
 • *Admin*: `listar pendentes`
