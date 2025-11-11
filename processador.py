@@ -53,6 +53,11 @@ def normalizar_valor(texto):
     except Exception: return None
 
 def extrair_valor_tipo_bandeira(texto):
+    """
+    Retorna (valor_float, tipo, bandeira)
+    tipo: 'pix' ou '10x' (string)
+    bandeira: 'elo'|'amex'|None
+    """
     texto = texto.lower().strip()
     match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)\s*(elo|amex)?\s*(pix|\d{1,2}x)$", texto)
     if match:
@@ -64,6 +69,10 @@ def extrair_valor_tipo_bandeira(texto):
         bandeira, tipo, valor = match.groups()
         bandeira = bandeira if bandeira in ("elo", "amex") else None
         return normalizar_valor(valor), tipo, bandeira
+    # se vier só valor, aceita (tratado pelo chamador)
+    match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:,\d{2})?)$", texto)
+    if match:
+        return normalizar_valor(match.group(1)), "pix", None
     return None, None, None
 
 def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
@@ -86,6 +95,20 @@ def calcular_valor_liquido_bandeira(valor, tipo, bandeira):
         return round(liquido, 2), taxa
     else:
         return None, None
+
+# pequena função utilitária para a calculadora (retorna string)
+def calculadora_simples_input(valor, tipo="pix", bandeira=None):
+    liquido, taxa = calcular_valor_liquido_bandeira(valor, tipo, bandeira)
+    if liquido is None:
+        return "❌ Tipo de pagamento inválido para calculadora. Use exemplos: 1000,00 pix ou 1000,00 10x ou 1000,00 elo 10x"
+    tipo_display = (f"{bandeira.upper()} {tipo.upper()}" if bandeira else tipo.upper())
+    return (
+        f"🧮 *Calculadora de recebimento*\n\n"
+        f"💰 Valor bruto: `{formatar_valor(valor)}`\n"
+        f"💳 Tipo: `{tipo_display}`\n"
+        f"🧾 Taxa aplicada: `{taxa:.2f}%`\n"
+        f"✅ Valor líquido que você receberá: `{formatar_valor(liquido)}`"
+    )
 
 def credito_disponivel():
     return round(sum(c["valor_liquido"] for c in comprovantes) - sum(p["valor"] for p in pagamentos), 2)
@@ -159,7 +182,7 @@ def extrato_visual(periodo="hoje"):
     def dentro(dt_str):
         try:
             dt_obj = datetime.strptime(dt_str, data_format)
-            # assume dt_obj naive; compare dates by date() to ignore tz/time
+            # compare dates only
             return data_ini_dt.date() <= dt_obj.date() <= data_fim_dt.date()
         except Exception:
             return False
@@ -181,11 +204,9 @@ def extrato_visual(periodo="hoje"):
             f"💳 Tipo: {tipo}\n"
             f"⏰ Hora: {c.get('hora', '')} {c.get('data', '')}"
         )
-        # acumula por tipo (PIX ou Cartão)
         if "PIX" in tipo.upper():
             total_bruto_pix += c["valor_bruto"]
         else:
-            # trata quaisquer tipos com X ou bandeiras como cartão
             total_bruto_cartao += c["valor_bruto"]
 
     # pendentes
@@ -344,6 +365,21 @@ def processar_mensagem(texto, user_id, username="ADMIN"):
     texto = texto.strip().lower()
     admin = is_admin(user_id)
     hora, data = get_data_hora_brasilia()
+
+    # ========== CALCULADORA ==========
+    # Suporta: /calc 1000,00 pix | calc 1000,00 10x | calcular 1000,00 elo 12x
+    if texto.startswith("/calc") or texto.startswith("calc") or texto.startswith("calcular"):
+        partes = texto.split(maxsplit=1)
+        if len(partes) < 2 or not partes[1].strip():
+            return ("🧮 *Calculadora*\n"
+                    "Use: `/calc 1000,00 pix` ou `/calc 1000,00 10x` ou `/calc 1200,00 elo 12x`\n"
+                    "Se você passar só o valor, assumimos PIX: `/calc 1000,00`")
+        payload = partes[1].strip()
+        valor, tipo, bandeira = extrair_valor_tipo_bandeira(payload)
+        if valor is None:
+            return "❌ Valor inválido. Use o formato: `1000,00 pix` ou `1000,00 10x`"
+        # se extrair_valor_tipo_bandeira retornar tipo None (só valor), default PIX já tratado lá
+        return calculadora_simples_input(valor, tipo or "pix", bandeira)
 
     # ========== LIMPEZA ==========
     if texto == "limpar pendentes" and admin:
