@@ -23,7 +23,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
-_calculadora_awaiting = {}  # estado por user_id: {'mode':'reverse','step':'ask_value'|'ask_type'|'await_custom','valor':float}
+_calculadora_awaiting = {}  # estado por user_id: {'mode':'reverse','step':'ask_value'|'ask_type'|'await_custom_type','valor':float,'reply_chat':chat_id}
 
 def send_pending_comprovante(update, context, resposta, comp_id=None):
     keyboard = [
@@ -171,17 +171,25 @@ def button_handler(update, context):
         return
 
     if data == "menu_calc_bruto":
-        # Inicia fluxo interativo: pede valor líquido desejado no privado e registra estado
+        # Inicia fluxo interativo: tenta pedir no privado, senão abre no mesmo chat
         user_id = query.from_user.id
         try:
+            # tenta enviar DM
             context.bot.send_message(chat_id=user_id, text="💲 *Quanto cobrar — Fluxo Interativo*\nDigite o valor líquido que você deseja receber (ex.: 500,00):", parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            # fallback: reply in same chat if private message fails
-            query.message.reply_text("💲 Digite no privado com o bot o valor líquido que deseja receber (ex.: 500,00).")
+            _calculadora_awaiting[user_id] = {"mode": "reverse", "step": "ask_value", "reply_chat": user_id}
+            query.answer("Enviei uma mensagem no privado. Responda lá com o valor líquido desejado.")
             return
-        _calculadora_awaiting[user_id] = {"mode": "reverse", "step": "ask_value"}
-        query.answer("Abra sua conversa privada com o bot e informe o valor líquido desejado.")
-        return
+        except Exception:
+            # se não conseguiu enviar DM (usuário não iniciou bot), inicia fluxo no mesmo chat
+            reply_chat = query.message.chat_id
+            _calculadora_awaiting[user_id] = {"mode": "reverse", "step": "ask_value", "reply_chat": reply_chat}
+            try:
+                context.bot.send_message(chat_id=reply_chat, text=f"💲 *Quanto cobrar — Fluxo Interativo*\n@{query.from_user.username or query.from_user.first_name}, digite aqui o valor líquido que você deseja receber (ex.: 500,00):", parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                # fallback: reply in message
+                query.message.reply_text("💲 Digite aqui o valor líquido que você deseja receber (ex.: 500,00):", parse_mode=ParseMode.MARKDOWN)
+            query.answer()
+            return
 
     if data == "menu_listar_pendentes":
         if not comprovantes_pendentes:
@@ -248,6 +256,7 @@ def button_handler(update, context):
             query.answer("Fluxo expirado ou não iniciado. Use o botão 'Quanto cobrar' no menu.", show_alert=True)
             return
         valor_liq = state.get("valor")
+        reply_chat = state.get("reply_chat", user_id)
         # map callback to tipo and bandeira
         key = data.replace("calc_type_", "")
         tipo = None
@@ -261,19 +270,18 @@ def button_handler(update, context):
         elif key == "amex_12x":
             tipo = "12x"; bandeira = "amex"
         elif key == "custom":
-            # ask user to type custom type
-            try:
-                context.bot.send_message(chat_id=user_id, text="✍️ Digite o tipo/bandeira desejada (ex.: `pix` ou `10x` ou `elo 12x` ou `amex 12x`):")
-            except Exception:
-                query.answer("Não consegui enviar mensagem privada. Digite no privado com o bot.", show_alert=True)
-                return
+            # ask user to type custom type in the same reply_chat
             _calculadora_awaiting[user_id]["step"] = "await_custom_type"
+            try:
+                context.bot.send_message(chat_id=reply_chat, text="✍️ Digite o tipo/bandeira desejada (ex.: `pix` ou `10x` ou `elo 12x` ou `amex 12x`):", parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                query.answer("Não consegui enviar a mensagem. Tente digitar o tipo no chat onde iniciou o fluxo.", show_alert=True)
             query.answer()
             return
-        # compute result
+        # compute result and send to reply_chat
         resposta = calculadora_reversa_input(valor_liq, tipo, bandeira)
         try:
-            context.bot.send_message(chat_id=user_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
+            context.bot.send_message(chat_id=reply_chat, text=resposta, parse_mode=ParseMode.MARKDOWN)
         except Exception:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
         _calculadora_awaiting.pop(user_id, None)
@@ -356,6 +364,7 @@ def motivo_rejeicao_handler(update, context):
     if state:
         mode = state.get("mode")
         step = state.get("step")
+        reply_chat = state.get("reply_chat", update.message.chat_id)
         if mode == "reverse":
             # passo 1: usuário digitou valor líquido desejado
             if step == "ask_value":
@@ -365,7 +374,7 @@ def motivo_rejeicao_handler(update, context):
                     return
                 _calculadora_awaiting[user_id]["valor"] = valor
                 _calculadora_awaiting[user_id]["step"] = "ask_type"
-                # enviar opções via inline keyboard
+                # enviar opções via inline keyboard to reply_chat
                 keyboard = [
                     [InlineKeyboardButton("PIX", callback_data="calc_type_pix")],
                     [InlineKeyboardButton("Cartão 1x", callback_data="calc_type_1x"), InlineKeyboardButton("Cartão 2x", callback_data="calc_type_2x")],
@@ -375,7 +384,10 @@ def motivo_rejeicao_handler(update, context):
                     [InlineKeyboardButton("Personalizado (digite)", callback_data="calc_type_custom")]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
-                update.message.reply_text("Escolha o tipo de recebimento (ou clique em Personalizado e digite):", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+                try:
+                    context.bot.send_message(chat_id=reply_chat, text="Escolha o tipo de recebimento (ou clique em Personalizado e digite):", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    update.message.reply_text("Escolha o tipo de recebimento (ou digite o tipo).", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
                 return
             # passo 2: aguardando tipo custom digitado (se o usuário escolheu custom)
             if step == "await_custom_type":
@@ -388,7 +400,10 @@ def motivo_rejeicao_handler(update, context):
                     return
                 valor_liq = state.get("valor")
                 resposta = calculadora_reversa_input(valor_liq, tipo, bandeira)
-                update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+                try:
+                    context.bot.send_message(chat_id=reply_chat, text=resposta, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
                 _calculadora_awaiting.pop(user_id, None)
                 return
         # se não foi tratado pelo fluxo, continua abaixo para motivos/rejeições ou fallback
