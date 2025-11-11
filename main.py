@@ -49,6 +49,7 @@ def bot_menu(update, context):
         [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
         [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
     ]
+    # mostra botões de lucro apenas em private para admins (como antes)
     if is_admin(user_id) and chat_type == "private":
         keyboard.insert(5, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
         keyboard.insert(6, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
@@ -111,22 +112,26 @@ def responder(update, context):
 
 def button_handler(update, context):
     query = update.callback_query
-    data = query.data
+    data = query.data or ""
     admin_id = ADMIN_ID
 
-    if data == "menu_comprovante":
+    # ack quick
+    try:
         query.answer()
+    except Exception:
+        pass
+
+    # Menu: respostas simples ou chamadas ao processador
+    if data == "menu_comprovante":
         query.message.reply_text(
             "📥 Para enviar comprovante, digite:\n`1000,00 pix` ou `700,00 10x`.",
             parse_mode=ParseMode.MARKDOWN
         )
-    elif data == "menu_listar_pendentes":
-        query.answer()
+        return
+
+    if data == "menu_listar_pendentes":
         if not comprovantes_pendentes:
-            query.message.reply_text(
-                "⏳ *Nenhum comprovante pendente aguardando aprovação.*",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            query.message.reply_text("⏳ *Nenhum comprovante pendente aguardando aprovação.*", parse_mode=ParseMode.MARKDOWN)
         else:
             for c in comprovantes_pendentes:
                 txt = (
@@ -149,25 +154,29 @@ def button_handler(update, context):
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=markup
                 )
-    elif data.startswith("aprovar_"):
+        return
+
+    # Aprovar/rejeitar pendente por ID (UUID)
+    if data.startswith("aprovar_"):
         comp_id = data.split("_", 1)[1]
         if query.from_user.id != admin_id:
             query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
             return
         texto = aprova_callback(comp_id, query.from_user)
-        try:
-            if texto:
+        if texto:
+            try:
                 query.edit_message_text(text=texto, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            if texto:
+            except Exception:
                 query.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
-        query.answer("Comprovante aprovado e saldo liberado!")
-    elif data.startswith("rejeitar_"):
+        query.answer("Comprovante processado.")
+        return
+
+    if data.startswith("rejeitar_"):
         comp_id = data.split("_", 1)[1]
         if query.from_user.id != admin_id:
             query.answer(text="Apenas o admin pode usar este botão.", show_alert=True)
             return
-        query.answer()
+        # armazenar contexto para obter motivo via mensagem privada do admin
         chat_id = query.message.chat_id
         msg_id = query.message.message_id
         _motivos_rejeicao[admin_id] = (chat_id, msg_id, comp_id)
@@ -175,34 +184,73 @@ def button_handler(update, context):
             chat_id=query.from_user.id,
             text=f"Digite o motivo da rejeição do comprovante {comp_id}: (exemplo: Divergência de valor)"
         )
-    elif data == "menu_saldo":
+        return
+
+    # Consultas via menu - chama processador e só envia resposta se houver texto
+    if data == "menu_saldo":
         resposta = processar_mensagem("total liquido", query.from_user.id, get_username(query.from_user))
-        query.answer()
         if resposta:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_extrato":
+        return
+
+    if data == "menu_extrato":
         resposta = processar_mensagem("extrato", query.from_user.id, get_username(query.from_user))
-        query.answer()
         if resposta:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_extrato_7":
+        return
+
+    if data == "menu_extrato_7":
         resposta = processar_mensagem("extrato 7dias", query.from_user.id, get_username(query.from_user))
-        query.answer()
         if resposta:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_fechamento":
+        return
+
+    if data == "menu_fechamento":
         resposta = processar_mensagem("fechamento do dia", query.from_user.id, get_username(query.from_user))
-        query.answer()
         if resposta:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_solicitar_pag":
-        query.answer()
+        return
+
+    if data == "menu_solicitar_pag":
         query.message.reply_text("📝 Para solicitar pagamento, envie:\n`solicito 300,00`", parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_ajuda":
+        return
+
+    if data == "menu_ajuda":
         resposta = processar_mensagem("ajuda", query.from_user.id, get_username(query.from_user))
-        query.answer()
         if resposta:
             query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # LUCRO: admin only (bot_menu only shows in private for admins)
+    if data == "menu_lucro":
+        if query.from_user.id != admin_id:
+            query.answer(text="Apenas admin.", show_alert=True)
+            return
+        resposta = processar_mensagem("relatorio lucro", query.from_user.id, get_username(query.from_user))
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data == "menu_lucro_semana":
+        if query.from_user.id != admin_id:
+            query.answer(text="Apenas admin.", show_alert=True)
+            return
+        resposta = processar_mensagem("relatorio lucro semana", query.from_user.id, get_username(query.from_user))
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data == "menu_lucro_mes":
+        if query.from_user.id != admin_id:
+            query.answer(text="Apenas admin.", show_alert=True)
+            return
+        resposta = processar_mensagem("relatorio lucro mes", query.from_user.id, get_username(query.from_user))
+        if resposta:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # fallback: se callback desconhecido
+    query.message.reply_text("⚠️ Ação desconhecida ou expirada. Tente novamente.", parse_mode=ParseMode.MARKDOWN)
 
 def motivo_rejeicao_handler(update, context):
     user_id = update.message.from_user.id
