@@ -10,6 +10,10 @@ from processador import (
     get_username,
     is_admin,
     formatar_valor,
+    calculadora_reversa_input,
+    calculadora_simples_input,
+    normalizar_valor,
+    extrair_valor_tipo_bandeira,
 )
 
 load_dotenv()
@@ -19,7 +23,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
-_calculadora_awaiting = {}
+_calculadora_awaiting = {}  # estado por user_id: {'mode':'reverse','step':'ask_value'|'ask_type'|'await_custom','valor':float}
 
 def send_pending_comprovante(update, context, resposta, comp_id=None):
     keyboard = [
@@ -167,14 +171,16 @@ def button_handler(update, context):
         return
 
     if data == "menu_calc_bruto":
-        # instruções específicas para calculadora reversa (quanto cobrar)
-        query.message.reply_text(
-            "💲 *Quanto cobrar (calculadora reversa)*\nUse no privado:\n"
-            "`/calc_bruto 500 pix` ou `/cb 500` (assume PIX)\n"
-            "Também funciona com cartão: `/calc_bruto 500 10x` ou `/calc_bruto 500 elo 12x`.\n"
-            "O resultado mostra o bruto arredondado para cima e o líquido aproximado após taxa.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        # Inicia fluxo interativo: pede valor líquido desejado no privado e registra estado
+        user_id = query.from_user.id
+        try:
+            context.bot.send_message(chat_id=user_id, text="💲 *Quanto cobrar — Fluxo Interativo*\nDigite o valor líquido que você deseja receber (ex.: 500,00):", parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            # fallback: reply in same chat if private message fails
+            query.message.reply_text("💲 Digite no privado com o bot o valor líquido que deseja receber (ex.: 500,00).")
+            return
+        _calculadora_awaiting[user_id] = {"mode": "reverse", "step": "ask_value"}
+        query.answer("Abra sua conversa privada com o bot e informe o valor líquido desejado.")
         return
 
     if data == "menu_listar_pendentes":
@@ -232,6 +238,46 @@ def button_handler(update, context):
             chat_id=query.from_user.id,
             text=f"Digite o motivo da rejeição do comprovante {comp_id}: (exemplo: Divergência de valor)"
         )
+        return
+
+    # ---- callbacks usados no fluxo interativo da calculadora reversa ----
+    if data.startswith("calc_type_"):
+        user_id = query.from_user.id
+        state = _calculadora_awaiting.get(user_id)
+        if not state or state.get("mode") != "reverse" or state.get("step") != "ask_type":
+            query.answer("Fluxo expirado ou não iniciado. Use o botão 'Quanto cobrar' no menu.", show_alert=True)
+            return
+        valor_liq = state.get("valor")
+        # map callback to tipo and bandeira
+        key = data.replace("calc_type_", "")
+        tipo = None
+        bandeira = None
+        if key == "pix":
+            tipo = "pix"
+        elif key in ["1x","2x","3x","6x","10x"]:
+            tipo = key
+        elif key == "elo_12x":
+            tipo = "12x"; bandeira = "elo"
+        elif key == "amex_12x":
+            tipo = "12x"; bandeira = "amex"
+        elif key == "custom":
+            # ask user to type custom type
+            try:
+                context.bot.send_message(chat_id=user_id, text="✍️ Digite o tipo/bandeira desejada (ex.: `pix` ou `10x` ou `elo 12x` ou `amex 12x`):")
+            except Exception:
+                query.answer("Não consegui enviar mensagem privada. Digite no privado com o bot.", show_alert=True)
+                return
+            _calculadora_awaiting[user_id]["step"] = "await_custom_type"
+            query.answer()
+            return
+        # compute result
+        resposta = calculadora_reversa_input(valor_liq, tipo, bandeira)
+        try:
+            context.bot.send_message(chat_id=user_id, text=resposta, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            query.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        _calculadora_awaiting.pop(user_id, None)
+        query.answer()
         return
 
     # Consultas via menu - chama processador e só envia resposta se houver texto
@@ -303,23 +349,69 @@ def button_handler(update, context):
 def motivo_rejeicao_handler(update, context):
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
-    motivo = update.message.text
+    texto = update.message.text.strip()
+
+    # Primeiro: fluxo interativo da calculadora (reverse) tem prioridade
+    state = _calculadora_awaiting.get(user_id)
+    if state:
+        mode = state.get("mode")
+        step = state.get("step")
+        if mode == "reverse":
+            # passo 1: usuário digitou valor líquido desejado
+            if step == "ask_value":
+                valor = normalizar_valor(texto)
+                if valor is None:
+                    update.message.reply_text("❌ Valor inválido. Digite novamente o valor líquido (ex.: 500,00).")
+                    return
+                _calculadora_awaiting[user_id]["valor"] = valor
+                _calculadora_awaiting[user_id]["step"] = "ask_type"
+                # enviar opções via inline keyboard
+                keyboard = [
+                    [InlineKeyboardButton("PIX", callback_data="calc_type_pix")],
+                    [InlineKeyboardButton("Cartão 1x", callback_data="calc_type_1x"), InlineKeyboardButton("Cartão 2x", callback_data="calc_type_2x")],
+                    [InlineKeyboardButton("Cartão 3x", callback_data="calc_type_3x"), InlineKeyboardButton("Cartão 6x", callback_data="calc_type_6x")],
+                    [InlineKeyboardButton("Cartão 10x", callback_data="calc_type_10x")],
+                    [InlineKeyboardButton("ELO 12x", callback_data="calc_type_elo_12x"), InlineKeyboardButton("AMEX 12x", callback_data="calc_type_amex_12x")],
+                    [InlineKeyboardButton("Personalizado (digite)", callback_data="calc_type_custom")]
+                ]
+                markup = InlineKeyboardMarkup(keyboard)
+                update.message.reply_text("Escolha o tipo de recebimento (ou clique em Personalizado e digite):", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+                return
+            # passo 2: aguardando tipo custom digitado (se o usuário escolheu custom)
+            if step == "await_custom_type":
+                type_text = texto.lower()
+                # usamos extrair_valor_tipo_bandeira com um valor falso para capturar tipo/bandeira
+                valor_dummy_str = "0,00 " + type_text
+                _, tipo, bandeira = extrair_valor_tipo_bandeira(valor_dummy_str)
+                if tipo is None:
+                    update.message.reply_text("Tipo inválido. Exemplos válidos: `pix`, `10x`, `elo 12x`, `amex 12x`. Tente novamente.")
+                    return
+                valor_liq = state.get("valor")
+                resposta = calculadora_reversa_input(valor_liq, tipo, bandeira)
+                update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+                _calculadora_awaiting.pop(user_id, None)
+                return
+        # se não foi tratado pelo fluxo, continua abaixo para motivos/rejeições ou fallback
+
+    # Se não é fluxo de calculadora, trata motivo de rejeição (admin) como antes
     if user_id in _motivos_rejeicao:
         chat_id, msg_id, comp_id = _motivos_rejeicao.pop(user_id)
-        resposta = rejeita_callback(comp_id, update.message.from_user, motivo)
+        resposta = rejeita_callback(comp_id, update.message.from_user, texto)
         if resposta and resposta.strip():
             try:
                 context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=resposta)
             except Exception:
                 context.bot.send_message(chat_id=chat_id, text=resposta)
             update.message.reply_text("Rejeição registrada!")
-    else:
-        resposta = processar_mensagem(motivo, user_id, username)
-        if resposta and resposta.strip():
-            try:
-                update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                update.message.reply_text(resposta)
+        return
+
+    # Caso contrário encaminha ao processador normal
+    resposta = processar_mensagem(texto, user_id, username)
+    if resposta and resposta.strip():
+        try:
+            update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            update.message.reply_text(resposta)
 
 def start(update, context):
     msg = (
