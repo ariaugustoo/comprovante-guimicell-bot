@@ -19,6 +19,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.environ.get('PORT', 8443))
 
 _motivos_rejeicao = {}
+_calculadora_awaiting = {}
 
 def send_pending_comprovante(update, context, resposta, comp_id=None):
     keyboard = [
@@ -49,11 +50,13 @@ def bot_menu(update, context):
         [InlineKeyboardButton("📝 Solicitar Pagamento", callback_data="menu_solicitar_pag")],
         [InlineKeyboardButton("ℹ️ Ajuda", callback_data="menu_ajuda")]
     ]
-    # mostra botões de lucro apenas em private para admins (como antes)
+    # adiciona Calculadora e botões de lucro apenas em private para admins
+    if chat_type == "private":
+        keyboard.insert(1, [InlineKeyboardButton("🧮 Calculadora", callback_data="menu_calc")])
     if is_admin(user_id) and chat_type == "private":
-        keyboard.insert(5, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
-        keyboard.insert(6, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
-        keyboard.insert(7, [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")])
+        keyboard.insert(6, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
+        keyboard.insert(7, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
+        keyboard.insert(8, [InlineKeyboardButton("📈 Lucro do Mês", callback_data="menu_lucro_mes")])
 
     markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text(
@@ -110,6 +113,16 @@ def responder(update, context):
         if update.message.chat.type == "private":
             update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda'.")
 
+def calc_command(update, context):
+    # Handler para /calc - encaminha para processador
+    args = context.args
+    texto = "/calc " + " ".join(args) if args else "/calc"
+    user_id = update.message.from_user.id
+    username = get_username(update.message.from_user)
+    resposta = processar_mensagem(texto, user_id, username)
+    if resposta:
+        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+
 def button_handler(update, context):
     query = update.callback_query
     data = query.data or ""
@@ -125,6 +138,13 @@ def button_handler(update, context):
     if data == "menu_comprovante":
         query.message.reply_text(
             "📥 Para enviar comprovante, digite:\n`1000,00 pix` ou `700,00 10x`.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    if data == "menu_calc":
+        query.message.reply_text(
+            "🧮 *Calculadora rápida*\nUse no privado:\n`/calc 1000,00 pix` ou `/calc 1000,00 10x` ou `/calc 1200,00 elo 12x`\nSe usar só o valor, assumimos PIX: `/calc 1000,00`",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -299,6 +319,7 @@ def main():
     dp.add_handler(CommandHandler('start', start))
     dp.add_handler(CommandHandler('ajuda', ajuda))
     dp.add_handler(CommandHandler('menu', bot_menu))
+    dp.add_handler(CommandHandler('calc', calc_command, pass_args=True))
     dp.add_handler(CallbackQueryHandler(button_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
