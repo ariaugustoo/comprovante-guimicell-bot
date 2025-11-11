@@ -74,6 +74,11 @@ def responder(update, context):
     username = get_username(update.message.from_user)
     resposta = processar_mensagem(texto, user_id, username)
 
+    # Se o processador pediu para abrir o menu com botões
+    if resposta == "MENU_BOTAO":
+        bot_menu(update, context)
+        return
+
     # Se resposta contém novo comprovante pendente (ID#UUID)
     m = re.search(r'ID#([a-f0-9\-]+)', str(resposta or ""))
     if m and "aguardando confirmação" in str(resposta or "").lower():
