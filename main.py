@@ -52,7 +52,9 @@ def bot_menu(update, context):
     ]
     # adiciona Calculadora e botões de lucro apenas em private para admins
     if chat_type == "private":
+        # inserir calculadora e calculadora reversa em linhas separadas para ficar claro
         keyboard.insert(1, [InlineKeyboardButton("🧮 Calculadora", callback_data="menu_calc")])
+        keyboard.insert(2, [InlineKeyboardButton("💲 Quanto cobrar", callback_data="menu_calc_bruto")])
     if is_admin(user_id) and chat_type == "private":
         keyboard.insert(6, [InlineKeyboardButton("📈 Lucro do Dia", callback_data="menu_lucro")])
         keyboard.insert(7, [InlineKeyboardButton("📈 Lucro da Semana", callback_data="menu_lucro_semana")])
@@ -114,9 +116,19 @@ def responder(update, context):
             update.message.reply_text("❓ Comando não reconhecido. Envie 'ajuda'.")
 
 def calc_command(update, context):
-    # Handler para /calc - encaminha para processador
+    # Handler para /calc e /c - encaminha para processador
     args = context.args
     texto = "/calc " + " ".join(args) if args else "/calc"
+    user_id = update.message.from_user.id
+    username = get_username(update.message.from_user)
+    resposta = processar_mensagem(texto, user_id, username)
+    if resposta:
+        update.message.reply_text(resposta, parse_mode=ParseMode.MARKDOWN)
+
+def calc_bruto_command(update, context):
+    # Handler para /calc_bruto e /cb - encaminha para processador
+    args = context.args
+    texto = "/calc_bruto " + " ".join(args) if args else "/calc_bruto"
     user_id = update.message.from_user.id
     username = get_username(update.message.from_user)
     resposta = processar_mensagem(texto, user_id, username)
@@ -144,7 +156,18 @@ def button_handler(update, context):
 
     if data == "menu_calc":
         query.message.reply_text(
-            "🧮 *Calculadora rápida*\nUse no privado:\n`/calc 1000,00 pix` ou `/calc 1000,00 10x` ou `/calc 1200,00 elo 12x`\nSe usar só o valor, assumimos PIX: `/calc 1000,00`",
+            "🧮 *Calculadora rápida*\nUse no privado:\n`/calc 1000 pix` (bruto→líquido)\nExemplos: `/calc 1000 10x` ou `/c 1000` (alias curto)",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    if data == "menu_calc_bruto":
+        # instruções específicas para calculadora reversa (quanto cobrar)
+        query.message.reply_text(
+            "💲 *Quanto cobrar (calculadora reversa)*\nUse no privado:\n"
+            "`/calc_bruto 500 pix` ou `/cb 500` (assume PIX)\n"
+            "Também funciona com cartão: `/calc_bruto 500 10x` ou `/calc_bruto 500 elo 12x`.\n"
+            "O resultado mostra o bruto arredondado para cima e o líquido aproximado após taxa.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -319,7 +342,10 @@ def main():
     dp.add_handler(CommandHandler('start', start))
     dp.add_handler(CommandHandler('ajuda', ajuda))
     dp.add_handler(CommandHandler('menu', bot_menu))
-    dp.add_handler(CommandHandler('calc', calc_command, pass_args=True))
+    dp.add_handler(CommandHandler('calc', calc_command))
+    dp.add_handler(CommandHandler('c', calc_command))            # alias curto
+    dp.add_handler(CommandHandler('calc_bruto', calc_bruto_command))
+    dp.add_handler(CommandHandler('cb', calc_bruto_command))     # alias curto
     dp.add_handler(CallbackQueryHandler(button_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, motivo_rejeicao_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, responder))
