@@ -66,7 +66,6 @@ def extrair_valor_tipo_bandeira(texto):
     """
     texto = texto.lower().strip()
     # padrão: valor [bandeira]? [tipo]
-    # tenta casos comuns
     match = re.match(r"^(\d{1,3}(?:\.\d{3})*,\d{2}|\d+(?:[.,]\d{2})?)\s*(elo|amex)?\s*(pix|\d{1,2}x)?$", texto)
     if match:
         valor, bandeira, tipo = match.groups()
