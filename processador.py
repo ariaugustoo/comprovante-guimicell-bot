@@ -33,7 +33,7 @@ def formatar_valor(valor):
 def get_data_hora_brasilia():
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
-    # Hora HH:MM, Data DD/MM/YYYY
+    # Hora HH:MM, Data DD/MM/YYYY (formato exibido e salvo)
     return agora.strftime('%H:%M'), agora.strftime('%d/%m/%Y')
 
 VALOR_BRL_REGEX = r"(\d{1,3}(?:\.\d{3})*,\d{2})"
@@ -138,112 +138,151 @@ def rejeita_callback(comp_id, admin_user, motivo):
 # ========== RELATÓRIOS E EXTRATOS ==========
 
 def extrato_visual(periodo="hoje"):
+    """
+    Extrato com datas no formato DD/MM/YYYY. Antes de comparar converte para datetime.
+    Ao final mostra totais brutos: PIX, CARTÃO e total de pagamentos.
+    """
     fuso = pytz.timezone('America/Sao_Paulo')
-    hoje = datetime.now(fuso).strftime('%d/%m/%Y')
+    hoje_dt = datetime.now(fuso)
+    data_format = "%d/%m/%Y"
     if periodo == "hoje":
-        data_inicial = data_final = hoje
-        titulo_periodo = hoje
+        data_ini_dt = data_fim_dt = hoje_dt
+        titulo_periodo = hoje_dt.strftime(data_format)
     elif "7" in periodo:
-        dt = datetime.now(fuso)
-        data_final = dt.strftime('%d/%m/%Y')
-        data_inicial = (dt - timedelta(days=6)).strftime('%d/%m/%Y')
-        titulo_periodo = f"{data_inicial} a {data_final}"
+        data_fim_dt = hoje_dt
+        data_ini_dt = hoje_dt - timedelta(days=6)
+        titulo_periodo = f"{data_ini_dt.strftime(data_format)} a {data_fim_dt.strftime(data_format)}"
     else:
-        data_inicial = data_final = hoje
-        titulo_periodo = hoje
+        data_ini_dt = data_fim_dt = hoje_dt
+        titulo_periodo = hoje_dt.strftime(data_format)
 
-    def dentro(dt):
-        # dt: string 'dd/mm/yyyy'
-        dt_obj = datetime.strptime(dt, "%d/%m/%Y")
-        ini = datetime.strptime(data_inicial, "%d/%m/%Y")
-        fim = datetime.strptime(data_final, "%d/%m/%Y")
-        return ini <= dt_obj <= fim
+    def dentro(dt_str):
+        try:
+            dt_obj = datetime.strptime(dt_str, data_format)
+            # assume dt_obj naive; compare dates by date() to ignore tz/time
+            return data_ini_dt.date() <= dt_obj.date() <= data_fim_dt.date()
+        except Exception:
+            return False
 
     linhas = [f"📄 *Extrato Detalhado — {titulo_periodo}*"]
-    for idx, c in enumerate([x for x in comprovantes if dentro(x["data"])], start=1):
+
+    total_bruto_pix = 0.0
+    total_bruto_cartao = 0.0
+    total_pagamentos = 0.0
+
+    # comprovantes aprovados
+    aprovados = [x for x in comprovantes if dentro(x.get("data", ""))]
+    for idx, c in enumerate(aprovados, start=1):
+        tipo = c.get("tipo", "")
         linhas.append(
             f"{idx}️⃣ [Aprovado]\n"
             f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
             f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
-            f"💳 Tipo: {c['tipo']}\n"
-            f"⏰ Hora: {c['hora']} {c['data']}"
+            f"💳 Tipo: {tipo}\n"
+            f"⏰ Hora: {c.get('hora', '')} {c.get('data', '')}"
         )
-    for c in [x for x in comprovantes_pendentes if dentro(x["data"])]:
+        # acumula por tipo (PIX ou Cartão)
+        if "PIX" in tipo.upper():
+            total_bruto_pix += c["valor_bruto"]
+        else:
+            # trata quaisquer tipos com X ou bandeiras como cartão
+            total_bruto_cartao += c["valor_bruto"]
+
+    # pendentes
+    pend = [x for x in comprovantes_pendentes if dentro(x.get("data", ""))]
+    for c in pend:
         linhas.append(
             f"⏳ [Pendente]\n"
             f"💸 Bruto: {formatar_valor(c['valor_bruto'])}\n"
             f"✅ Líquido: {formatar_valor(c['valor_liquido'])}\n"
-            f"💳 Tipo: {c['tipo']}\n"
-            f"⏰ Hora: {c['hora']} {c['data']}"
+            f"💳 Tipo: {c.get('tipo','')}\n"
+            f"⏰ Hora: {c.get('hora','')} {c.get('data','')}"
         )
-    for p in [x for x in pagamentos if dentro(x["data"])]:
+
+    # pagamentos
+    pays = [x for x in pagamentos if dentro(x.get("data", ""))]
+    for p in pays:
         linhas.append(
             f"💵 [Pagamento feito]\n"
             f"🏷 Valor: {formatar_valor(p['valor'])}\n"
-            f"⏰ Hora: {p['hora']} {p['data']}"
+            f"⏰ Hora: {p.get('hora','')} {p.get('data','')}"
         )
+        total_pagamentos += p["valor"]
+
+    # totais finais
+    linhas.append("\n*Totais finais (bruto):*")
+    linhas.append(f" • PIX: `{formatar_valor(total_bruto_pix)}`")
+    linhas.append(f" • Cartões: `{formatar_valor(total_bruto_cartao)}`")
+    linhas.append(f" • Pagamentos registrados: `{formatar_valor(total_pagamentos)}`")
+
     if len(linhas) == 1:
         linhas.append("_Nenhum lançamento no período._")
     return "\n\n".join(linhas)
 
 def relatorio_lucro(periodo="dia"):
+    """
+    Relatório de lucro por período (data em DD/MM/YYYY; converte para datetime para filtrar).
+    """
     fuso = pytz.timezone('America/Sao_Paulo')
     dt_now = datetime.now(fuso)
     data_format = "%d/%m/%Y"
     if periodo == "dia":
-        data_ini = data_fim = dt_now.strftime(data_format)
-        titulo = f"Lucro do dia {data_ini}"
+        data_ini_dt = data_fim_dt = dt_now
+        titulo = f"Lucro do dia {dt_now.strftime(data_format)}"
     elif periodo == "semana":
-        data_fim = dt_now.strftime(data_format)
-        data_ini = (dt_now - timedelta(days=6)).strftime(data_format)
-        titulo = f"Lucro da semana ({data_ini} a {data_fim})"
+        data_fim_dt = dt_now
+        data_ini_dt = dt_now - timedelta(days=6)
+        titulo = f"Lucro da semana ({data_ini_dt.strftime(data_format)} a {data_fim_dt.strftime(data_format)})"
     elif periodo == "mes":
-        data_ini = dt_now.replace(day=1).strftime(data_format)
-        data_fim = dt_now.strftime(data_format)
-        titulo = f"Lucro do mês ({data_ini} a {data_fim})"
+        data_ini_dt = dt_now.replace(day=1)
+        data_fim_dt = dt_now
+        titulo = f"Lucro do mês ({data_ini_dt.strftime(data_format)} a {data_fim_dt.strftime(data_format)})"
     else:
-        data_ini = data_fim = dt_now.strftime(data_format)
-        titulo = f"Lucro do dia {data_ini}"
+        data_ini_dt = data_fim_dt = dt_now
+        titulo = f"Lucro do dia {dt_now.strftime(data_format)}"
 
-    def dentro(data):
-        dt_obj = datetime.strptime(data, "%d/%m/%Y")
-        ini = datetime.strptime(data_ini, "%d/%m/%Y")
-        fim = datetime.strptime(data_fim, "%d/%m/%Y")
-        return ini <= dt_obj <= fim
+    def dentro(dt_str):
+        try:
+            dt_obj = datetime.strptime(dt_str, data_format)
+            return data_ini_dt.date() <= dt_obj.date() <= data_fim_dt.date()
+        except Exception:
+            return False
 
     total_bruto_pix = total_bruto_cartao = 0.0
     total_liquido_pix = total_liquido_cartao = 0.0
     total_lucro_pix = total_lucro_cartao = 0.0
 
-    for c in (x for x in comprovantes if dentro(x["data"])):
+    for c in (x for x in comprovantes if dentro(x.get("data", ""))):
         valor = c["valor_bruto"]
-        tipo = c["tipo"]
+        tipo = c.get("tipo", "")
         liquido_loja = c["valor_liquido"]
 
-        if tipo == "PIX":
+        if "PIX" in tipo.upper():
             taxa_loja = taxa_pix
             taxa_maquina = 0.0
             lucro_pix = valor * (taxa_loja - taxa_maquina) / 100
             total_bruto_pix += valor
             total_liquido_pix += liquido_loja
             total_lucro_pix += lucro_pix
-        elif "ELO" in tipo:
-            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+        elif "ELO" in tipo.upper():
+            m = re.search(r'(\d{1,2})X', tipo.upper())
+            parcelas = int(m.group(1)) if m else 1
             taxa_loja = taxas_elo.get(parcelas, 0)
             taxa_maquina = taxas_reais_elo.get(parcelas, 0)
             lucro_elo = valor * (taxa_loja - taxa_maquina) / 100
             total_bruto_cartao += valor
             total_liquido_cartao += liquido_loja
             total_lucro_cartao += lucro_elo
-        elif "AMEX" in tipo:
-            parcelas = int(re.search(r'(\d{1,2})X', tipo).group(1))
+        elif "AMEX" in tipo.upper():
+            m = re.search(r'(\d{1,2})X', tipo.upper())
+            parcelas = int(m.group(1)) if m else 1
             taxa_loja = taxas_amex.get(parcelas, 0)
             taxa_maquina = taxas_reais_amex.get(parcelas, 0)
             lucro_amex = valor * (taxa_loja - taxa_maquina) / 100
             total_bruto_cartao += valor
             total_liquido_cartao += liquido_loja
             total_lucro_cartao += lucro_amex
-        elif "X" in tipo:
+        elif "X" in tipo.upper():
             try:
                 parcelas = int(re.sub(r'\D', '', tipo))
                 taxa_loja = taxas_cartao.get(parcelas, 0)
